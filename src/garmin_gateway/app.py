@@ -4,7 +4,7 @@ import contextlib
 import os
 from pathlib import Path
 from starlette.applications import Starlette
-from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
 from . import store, oauth, proxy, security
@@ -44,8 +44,14 @@ def build_app(config: Config) -> Starlette:
         # still read it as "not here".
         return HTMLResponse(landing, status_code=404)
 
+    favicon_svg = (_TPL / "favicon.svg").read_text()
+
     async def healthz(request):
         return PlainTextResponse("ok")
+
+    async def favicon(request):
+        return Response(favicon_svg, media_type="image/svg+xml",
+                        headers={"Cache-Control": "public, max-age=86400"})
 
     async def meta(request):
         return JSONResponse(oauth.metadata(config))
@@ -108,6 +114,8 @@ def build_app(config: Config) -> Starlette:
     routes = [
         Route("/", home, methods=["GET"]),
         Route("/healthz", healthz, methods=["GET"]),
+        Route("/favicon.svg", favicon, methods=["GET"]),
+        Route("/favicon.ico", favicon, methods=["GET"]),
         Route("/.well-known/oauth-authorization-server", meta, methods=["GET"]),
         Route("/oauth/register", register, methods=["POST"]),
         Route("/oauth/authorize", authz_get, methods=["GET"]),
