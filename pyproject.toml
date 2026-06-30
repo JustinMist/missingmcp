@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Multi-user OAuth 2.1 gateway that connects Garmin Connect to Claude by wrapping the garmin_mcp worker"
 readme = "README.md"
 license = { file = "LICENSE" }
-authors = [{ name = "Vaclav Slajs" }]
+authors = [{ name = "Vaclav Slajs", email = "vaclav@slajs.eu" }]
 keywords = ["mcp", "garmin", "oauth", "claude", "garmin-connect"]
 requires-python = ">=3.12"
 dependencies = [
