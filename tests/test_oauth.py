@@ -1,4 +1,3 @@
-import json
 import pytest
 from starlette.applications import Starlette
 from starlette.routing import Route
@@ -22,7 +21,7 @@ def test_metadata_shape():
     assert m["authorization_endpoint"] == "https://gw.example.com/oauth/authorize"
     assert m["token_endpoint"] == "https://gw.example.com/oauth/token"
     assert m["registration_endpoint"] == "https://gw.example.com/oauth/register"
-    assert "S256" in m["code_challenge_methods_supported"]
+    assert m["code_challenge_methods_supported"] == ["S256"]
 
 
 def _client_app(conn):
@@ -39,10 +38,22 @@ def test_register_returns_client_id(conn):
     assert body["client_id"]
     assert body["client_secret"]
     assert body["redirect_uris"] == ["https://claude.ai/cb"]
-    assert store.get_client(conn, body["client_id"]) is not None
+    stored = store.get_client(conn, body["client_id"])
+    assert stored is not None
+    assert stored["client_secret_hash"] == store.hash_token(body["client_secret"])
 
 
 def test_register_rejects_missing_redirect_uris(conn):
     c = _client_app(conn)
     resp = c.post("/oauth/register", json={})
     assert resp.status_code == 400
+
+
+def test_register_rejects_empty_redirect_uris(conn):
+    c = _client_app(conn)
+    assert c.post("/oauth/register", json={"redirect_uris": []}).status_code == 400
+
+
+def test_register_rejects_empty_string_redirect_uri(conn):
+    c = _client_app(conn)
+    assert c.post("/oauth/register", json={"redirect_uris": [""]}).status_code == 400
