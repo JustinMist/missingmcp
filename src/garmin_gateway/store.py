@@ -50,7 +50,8 @@ def init_db(db_path: str) -> sqlite3.Connection:
             garmin_user_key TEXT NOT NULL,
             client_id       TEXT,
             created_at      TEXT DEFAULT (datetime('now')),
-            last_used       TEXT
+            last_used       TEXT,
+            expires_at      INTEGER
         );
         CREATE TABLE IF NOT EXISTS oauth_clients (
             client_id          TEXT PRIMARY KEY,
@@ -72,6 +73,11 @@ def init_db(db_path: str) -> sqlite3.Connection:
         """
     )
     conn.commit()
+    # Migrate DBs created before access_tokens had expires_at (added for token TTL).
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(access_tokens)")}
+    if "expires_at" not in cols:
+        conn.execute("ALTER TABLE access_tokens ADD COLUMN expires_at INTEGER")
+        conn.commit()
     if db_path not in (":memory:", ""):
         for suffix in ("", "-wal", "-shm"):
             try:
@@ -132,27 +138,55 @@ def stats_counts(conn) -> dict:
 
 # Access tokens have no TTL and are not auto-revoked. To revoke a device,
 # delete its row from the access_tokens table (admin is DB-level; UI deferred per design).
-def create_access_token(conn, token_hash: str, key: str, client_id: str) -> None:
+def create_access_token(conn, token_hash: str, key: str, client_id: str, ttl: int = 0) -> None:
+    expires_at = int(time.time()) + ttl if ttl else None
     conn.execute(
-        "INSERT OR REPLACE INTO access_tokens (token_hash, garmin_user_key, client_id, last_used) "
-        "VALUES (?, ?, ?, datetime('now'))",
-        (token_hash, key, client_id),
+        "INSERT OR REPLACE INTO access_tokens "
+        "(token_hash, garmin_user_key, client_id, last_used, expires_at) "
+        "VALUES (?, ?, ?, datetime('now'), ?)",
+        (token_hash, key, client_id, expires_at),
     )
     conn.commit()
 
 
 def account_key_for_token_hash(conn, token_hash: str) -> str | None:
     row = conn.execute(
-        "SELECT garmin_user_key FROM access_tokens WHERE token_hash=?", (token_hash,)
+        "SELECT garmin_user_key, expires_at FROM access_tokens WHERE token_hash=?",
+        (token_hash,),
     ).fetchone()
     if row is None:
         return None
+    if row["expires_at"] is not None and time.time() > row["expires_at"]:
+        return None  # expired; the reaper purges it
     conn.execute(
         "UPDATE access_tokens SET last_used=datetime('now') WHERE token_hash=?",
         (token_hash,),
     )
     conn.commit()
     return row["garmin_user_key"]
+
+
+def cleanup_expired_tokens(conn) -> None:
+    conn.execute(
+        "DELETE FROM access_tokens WHERE expires_at IS NOT NULL AND expires_at < ?",
+        (int(time.time()),),
+    )
+    conn.commit()
+
+
+def revoke_token(conn, token_hash: str) -> int:
+    """Revoke one access token by its hash. Returns rows deleted."""
+    cur = conn.execute("DELETE FROM access_tokens WHERE token_hash=?", (token_hash,))
+    conn.commit()
+    return cur.rowcount
+
+
+def revoke_account(conn, key: str) -> int:
+    """Revoke all access tokens for an account (a 'log out all devices'). Returns
+    rows deleted. The Garmin account row itself is left intact."""
+    cur = conn.execute("DELETE FROM access_tokens WHERE garmin_user_key=?", (key,))
+    conn.commit()
+    return cur.rowcount
 
 
 # --- oauth clients --------------------------------------------------------

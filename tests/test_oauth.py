@@ -198,7 +198,7 @@ def test_authorize_post_mfa_rejects_tampered_redirect(conn):
 
 def _token_app(conn):
     async def tok(request):
-        return await oauth.token_exchange(request, conn)
+        return await oauth.token_exchange(request, conn, CONFIG)
     return TestClient(Starlette(routes=[Route("/oauth/token", tok, methods=["POST"])]))
 
 

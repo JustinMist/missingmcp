@@ -45,6 +45,34 @@ def test_access_token_maps_to_account(conn):
     assert store.account_key_for_token_hash(conn, "nope") is None
 
 
+def test_access_token_expiry(conn):
+    store.create_access_token(conn, "h_exp", "me@x.cz", "c1", ttl=-1)    # already expired
+    store.create_access_token(conn, "h_live", "me@x.cz", "c1", ttl=3600)
+    store.create_access_token(conn, "h_forever", "me@x.cz", "c1")        # ttl=0 -> no expiry
+    assert store.account_key_for_token_hash(conn, "h_exp") is None       # rejected
+    assert store.account_key_for_token_hash(conn, "h_live") == "me@x.cz"
+    assert store.account_key_for_token_hash(conn, "h_forever") == "me@x.cz"
+
+
+def test_cleanup_expired_tokens(conn):
+    store.create_access_token(conn, "h_exp", "me@x.cz", "c1", ttl=-1)
+    store.create_access_token(conn, "h_live", "me@x.cz", "c1", ttl=3600)
+    store.cleanup_expired_tokens(conn)
+    assert conn.execute("SELECT COUNT(*) FROM access_tokens").fetchone()[0] == 1  # only h_live
+
+
+def test_revoke_account_and_token(conn):
+    store.create_access_token(conn, "h1", "me@x.cz", "c1")
+    store.create_access_token(conn, "h2", "me@x.cz", "c2")
+    store.create_access_token(conn, "h3", "other@x.cz", "c1")
+    assert store.revoke_account(conn, "me@x.cz") == 2
+    assert store.account_key_for_token_hash(conn, "h1") is None
+    assert store.account_key_for_token_hash(conn, "h3") == "other@x.cz"   # untouched
+    assert store.revoke_token(conn, "h3") == 1
+    assert store.account_key_for_token_hash(conn, "h3") is None
+    assert store.revoke_token(conn, "nope") == 0
+
+
 def test_client_roundtrip(conn):
     store.create_client(conn, "c1", "secret_hash", ["https://a/cb", "https://b/cb"], "Claude")
     c = store.get_client(conn, "c1")

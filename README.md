@@ -85,6 +85,7 @@ Set via environment (or `.env`). See [`.env.example`](.env.example).
 | `WORKER_IDLE_TTL` | no | `900` | Seconds before an idle worker is reaped. |
 | `WORKER_STARTUP_TIMEOUT` | no | `20` | Seconds to wait for a worker to become healthy. |
 | `MAX_WORKERS` | no | `10` | Max concurrent per-user workers. |
+| `ACCESS_TOKEN_TTL_DAYS` | no | `90` | Bearer token lifetime; user re-authenticates after it. `0` disables expiry. |
 | `OPERATOR_NAME` / `OPERATOR_EMAIL` | no | — | Shown on the landing page. |
 | `GATEWAY_LOG_FILE` | no | — | If set, tees structured + stdlib logs to this file. |
 | `GATEWAY_LOG_LEVEL` | no | `info` | `debug`\|`info`\|`warning`\|`error`\|`critical`. `debug` is verbose (logs garminconnect/urllib3 internals) — avoid in production. |
@@ -98,6 +99,8 @@ python scripts/status.py          # snapshot: people with a token, devices/clien
                                   #   connected, registered clients, running workers
 python scripts/monitor.py         # live tail of structured events
 python scripts/monitor.py --all   # include garminconnect/urllib3 debug noise
+python scripts/revoke.py --list             # accounts + token counts
+python scripts/revoke.py --account <email>  # kill-switch: revoke all their tokens
 ```
 
 **With Docker** the scripts are baked into the image at `/app/scripts`; run them
@@ -147,8 +150,10 @@ whenever those counts change, and `status.py` lists the running workers.
   refuses to start with the placeholder from `.env.example`.
 - **Pin `GARMIN_MCP_REF` to a reviewed commit SHA** — `main` is a floating ref that
   can change without notice (supply-chain).
-- **Access tokens have no expiry or auto-revocation** — to revoke a device, delete
-  its row from the `access_tokens` table.
+- **Revoking access** — access tokens expire after `ACCESS_TOKEN_TTL_DAYS` (default
+  90; the user just re-authenticates in Claude). To revoke sooner — a leaked token
+  or a removed user — run `python scripts/revoke.py --account <email>` (kill-switch
+  for all of that account's tokens).
 - **Run a manual end-to-end smoke test** with a real Garmin account (including the
   MFA path) before connecting real users — the `garminconnect` login/token path is
   mocked in the automated tests.

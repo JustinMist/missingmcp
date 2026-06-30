@@ -66,7 +66,7 @@ def build_app(config: Config) -> Starlette:
     async def token(request):
         if not rate.check(f"oauth:{request.client.host}", 20, 60):
             return JSONResponse({"error": "rate_limited"}, status_code=429)
-        return await oauth.token_exchange(request, conn)
+        return await oauth.token_exchange(request, conn, config)
 
     def mcp(method):
         async def handler(request):
@@ -83,6 +83,7 @@ def build_app(config: Config) -> Starlette:
                 with contextlib.suppress(Exception):
                     await manager.reap_idle()
                     store.cleanup_expired_codes(conn)
+                    store.cleanup_expired_tokens(conn)
                     rate.gc()
                     manager.write_snapshot()  # refresh idle_seconds periodically
                     stats = {**store.stats_counts(conn),

@@ -17,6 +17,7 @@ class Config:
     worker_idle_ttl: int          # seconds
     worker_startup_timeout: int   # seconds
     max_workers: int
+    access_token_ttl: int         # seconds; 0 disables expiry
     operator_name: str
     operator_email: str
 
@@ -46,6 +47,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         worker_idle_ttl=int(env.get("WORKER_IDLE_TTL", "900")),
         worker_startup_timeout=int(env.get("WORKER_STARTUP_TIMEOUT", "20")),
         max_workers=int(env.get("MAX_WORKERS", "10")),
+        access_token_ttl=int(env.get("ACCESS_TOKEN_TTL_DAYS", "90")) * 86400,
         operator_name=env.get("OPERATOR_NAME", "the operator"),
         operator_email=env.get("OPERATOR_EMAIL", ""),
     )

@@ -215,7 +215,7 @@ async def authorize_post(request, _templates, state, conn, config) -> HTMLRespon
     return _finish(conn, config, params, result.tokens_json, email)
 
 
-async def token_exchange(request, conn) -> JSONResponse:
+async def token_exchange(request, conn, config) -> JSONResponse:
     form = await request.form()
     log("token-exchange", grant_type=form.get("grant_type", ""),
         client_id=form.get("client_id", ""), redirect_uri=form.get("redirect_uri", ""))
@@ -239,6 +239,10 @@ async def token_exchange(request, conn) -> JSONResponse:
         log_error("token-invalid-grant", reason="pkce_mismatch")
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
     token = security.new_secret(32)
-    store.create_access_token(conn, store.hash_token(token), row["garmin_user_key"], form.get("client_id"))
+    store.create_access_token(conn, store.hash_token(token), row["garmin_user_key"],
+                              form.get("client_id"), ttl=config.access_token_ttl)
     log("token-issued", garmin_user_key=row["garmin_user_key"])
-    return JSONResponse({"access_token": token, "token_type": "Bearer"})
+    resp = {"access_token": token, "token_type": "Bearer"}
+    if config.access_token_ttl:
+        resp["expires_in"] = config.access_token_ttl
+    return JSONResponse(resp)
