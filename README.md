@@ -158,6 +158,10 @@ whenever those counts change, and `status.py` lists the running workers.
   MFA path) before connecting real users — the `garminconnect` login/token path is
   mocked in the automated tests.
 
+## Support
+
+If this gateway is useful to you, you can [buy me a coffee ☕](https://buymeacoffee.com/veniko).
+
 ## License
 
 [MIT](LICENSE) © 2026 Vaclav Slajs
