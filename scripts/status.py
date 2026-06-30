@@ -62,13 +62,21 @@ def main():
                   f"connected: {r['created']}  last used: {r['last_used'] or '—'}")
 
     crows = db.execute(
-        "SELECT client_name, redirect_uris, created_at FROM oauth_clients ORDER BY created_at"
+        """
+        SELECT c.client_name AS name, c.redirect_uris AS redirect,
+               COUNT(t.token_hash) AS tokens,
+               GROUP_CONCAT(DISTINCT t.garmin_user_key) AS accounts
+        FROM oauth_clients c
+        LEFT JOIN access_tokens t ON t.client_id = c.client_id
+        GROUP BY c.client_id ORDER BY c.created_at
+        """
     ).fetchall()
     if crows:
         print("\nOAuth clients (registered)")
         for r in crows:
-            name = r["client_name"] or "(unnamed)"
-            print(f"  {name:<32} {r['redirect_uris']}  {r['created_at']}")
+            name = r["name"] or "(unnamed)"
+            accounts = r["accounts"] or "—  (never completed OAuth)"
+            print(f"  {name:<30} account: {accounts:<28} tokens: {r['tokens']:<3} {r['redirect']}")
     print()
 
 
