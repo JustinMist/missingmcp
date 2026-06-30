@@ -1,8 +1,10 @@
 import pytest
+from unittest.mock import patch
+from urllib.parse import urlparse, parse_qs
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.testclient import TestClient
-from garmin_gateway import store, oauth
+from garmin_gateway import store, oauth, security, garmin_login
 from garmin_gateway.config import load_config
 
 CONFIG = load_config({"GATEWAY_SECRET": "z" * 40, "PUBLIC_URL": "https://gw.example.com"})
@@ -57,3 +59,91 @@ def test_register_rejects_empty_redirect_uris(conn):
 def test_register_rejects_empty_string_redirect_uri(conn):
     c = _client_app(conn)
     assert c.post("/oauth/register", json={"redirect_uris": [""]}).status_code == 400
+
+
+def _authz_app(conn):
+    state = oauth.AuthState(security.CsrfStore())
+    async def aget(request):
+        return await oauth.authorize_get(request, None, state, conn)
+    async def apost(request):
+        return await oauth.authorize_post(request, None, state, conn, CONFIG)
+    app = Starlette(routes=[
+        Route("/oauth/authorize", aget, methods=["GET"]),
+        Route("/oauth/authorize", apost, methods=["POST"]),
+    ])
+    return TestClient(app, follow_redirects=False), state
+
+
+def _register(conn):
+    cid = security.new_secret(8)
+    store.create_client(conn, cid, "h", ["https://claude.ai/cb"], "Claude")
+    return cid
+
+
+def test_authorize_get_renders_form(conn):
+    client, _ = _authz_app(conn)
+    cid = _register(conn)
+    r = client.get("/oauth/authorize", params={
+        "client_id": cid, "redirect_uri": "https://claude.ai/cb",
+        "state": "xyz", "code_challenge": "abc", "code_challenge_method": "S256",
+        "response_type": "code",
+    })
+    assert r.status_code == 200
+    assert "garmin_email" in r.text
+    assert "csrf" in r.text
+
+
+def test_authorize_get_rejects_bad_redirect(conn):
+    client, _ = _authz_app(conn)
+    cid = _register(conn)
+    r = client.get("/oauth/authorize", params={
+        "client_id": cid, "redirect_uri": "https://evil.com/cb",
+        "state": "xyz", "code_challenge": "abc", "code_challenge_method": "S256",
+    })
+    assert r.status_code == 400
+
+
+def test_login_no_mfa_redirects_with_code(conn):
+    client, state = _authz_app(conn)
+    cid = _register(conn)
+    # obtain a CSRF token the way the GET would mint one
+    csrf = state.csrf.issue()
+    with patch.object(garmin_login, "start_login",
+                      return_value=garmin_login.LoginResult(status="ok", tokens_json='{"t":1}')), \
+         patch.object(garmin_login, "verify_tokens", return_value="Vaclav S"):
+        r = client.post("/oauth/authorize", data={
+            "csrf": csrf, "client_id": cid, "redirect_uri": "https://claude.ai/cb",
+            "state": "xyz", "code_challenge": "abc", "code_challenge_method": "S256",
+            "garmin_email": "Me@X.cz", "garmin_password": "pw",
+        })
+    assert r.status_code == 302
+    q = parse_qs(urlparse(r.headers["location"]).query)
+    assert q["state"] == ["xyz"]
+    assert q["code"]
+    # account stored under normalized (lowercased) email
+    assert store.get_account_tokens(conn, "me@x.cz", CONFIG.gateway_secret) == '{"t":1}'
+
+
+def test_login_mfa_then_verify_redirects(conn):
+    client, state = _authz_app(conn)
+    cid = _register(conn)
+    csrf1 = state.csrf.issue()
+    with patch.object(garmin_login, "start_login",
+                      return_value=garmin_login.LoginResult(status="needs_mfa", pending=("P", "S"))):
+        r1 = client.post("/oauth/authorize", data={
+            "csrf": csrf1, "client_id": cid, "redirect_uri": "https://claude.ai/cb",
+            "state": "xyz", "code_challenge": "abc", "code_challenge_method": "S256",
+            "garmin_email": "me@x.cz", "garmin_password": "pw",
+        })
+    assert r1.status_code == 200 and "login_id" in r1.text
+    # extract login_id and a fresh csrf rendered into the MFA page
+    import re
+    login_id = re.search(r'name="login_id" value="([^"]+)"', r1.text).group(1)
+    csrf2 = re.search(r'name="csrf" value="([^"]+)"', r1.text).group(1)
+    with patch.object(garmin_login, "resume_login", return_value='{"t":9}'), \
+         patch.object(garmin_login, "verify_tokens", return_value="Vaclav S"):
+        r2 = client.post("/oauth/authorize", data={
+            "csrf": csrf2, "login_id": login_id, "mfa_code": "123456",
+        })
+    assert r2.status_code == 302
+    assert store.get_account_tokens(conn, "me@x.cz", CONFIG.gateway_secret) == '{"t":9}'

@@ -1,7 +1,12 @@
 from __future__ import annotations
 import json
-from starlette.responses import JSONResponse
-from . import store, security
+import time
+from pathlib import Path
+from urllib.parse import urlencode
+from starlette.responses import JSONResponse, HTMLResponse, RedirectResponse
+from . import store, security, garmin_login
+
+_TPL_DIR = Path(__file__).parent / "templates"
 
 
 def metadata(config) -> dict:
@@ -41,3 +46,134 @@ async def register_client(request, conn) -> JSONResponse:
         },
         status_code=201,
     )
+
+
+def _tpl(name: str) -> str:
+    return (_TPL_DIR / name).read_text()
+
+
+class AuthState:
+    def __init__(self, csrf):
+        self.csrf = csrf
+        self._mfa: dict[str, tuple] = {}   # login_id -> (pending, oauth_params, ts)
+
+    def put_mfa(self, pending, oauth_params: dict) -> str:
+        self._gc()
+        from .security import new_secret
+        lid = new_secret(18)
+        self._mfa[lid] = (pending, oauth_params, time.monotonic())
+        return lid
+
+    def pop_mfa(self, login_id: str):
+        self._gc()
+        item = self._mfa.pop(login_id, None)
+        if item is None:
+            return None
+        pending, params, _ts = item
+        return pending, params
+
+    def _gc(self) -> None:
+        now = time.monotonic()
+        for k, (_p, _q, ts) in list(self._mfa.items()):
+            if now - ts > 300:
+                self._mfa.pop(k, None)
+
+
+def _fill(template: str, mapping: dict, error: str = "") -> str:
+    out = template.replace("{ERROR}", f'<p class="err">{error}</p>' if error else "")
+    for k, v in mapping.items():
+        out = out.replace("{" + k + "}", v)
+    return out
+
+
+def render_authorize(params: dict, csrf_token: str, error: str = "") -> HTMLResponse:
+    html = _fill(_tpl("authorize.html"), {
+        "CSRF": csrf_token,
+        "CLIENT_ID": params.get("client_id", ""),
+        "REDIRECT_URI": params.get("redirect_uri", ""),
+        "STATE": params.get("state", ""),
+        "CODE_CHALLENGE": params.get("code_challenge", ""),
+        "METHOD": params.get("code_challenge_method", ""),
+    }, error)
+    return HTMLResponse(html)
+
+
+def _oauth_params_from(source) -> dict:
+    return {
+        "client_id": source.get("client_id", ""),
+        "redirect_uri": source.get("redirect_uri", ""),
+        "state": source.get("state", ""),
+        "code_challenge": source.get("code_challenge", ""),
+        "code_challenge_method": source.get("code_challenge_method", ""),
+    }
+
+
+async def authorize_get(request, _templates, state, conn) -> HTMLResponse:
+    params = _oauth_params_from(request.query_params)
+    client = store.get_client(conn, params["client_id"])
+    if client is None:
+        return HTMLResponse("unknown client_id", status_code=400)
+    if not security.validate_redirect_uri(params["redirect_uri"], client["redirect_uris"]):
+        return HTMLResponse("invalid redirect_uri", status_code=400)
+    if params["code_challenge_method"] != "S256" or not params["code_challenge"]:
+        return HTMLResponse("PKCE S256 required", status_code=400)
+    return render_authorize(params, state.csrf.issue())
+
+
+def _finish(conn, config, params: dict, tokens_json: str, email: str) -> RedirectResponse:
+    garmin_login.verify_tokens(tokens_json)  # raises on failure
+    key = email.strip().lower()
+    store.upsert_account(conn, key, tokens_json, config.gateway_secret)
+    code = security.new_secret(32)
+    store.create_code(
+        conn, store.hash_token(code), params["client_id"], params["redirect_uri"],
+        params["code_challenge"], params["code_challenge_method"], key,
+    )
+    sep = "&" if "?" in params["redirect_uri"] else "?"
+    location = params["redirect_uri"] + sep + urlencode({"code": code, "state": params["state"]})
+    return RedirectResponse(location, status_code=302)
+
+
+async def authorize_post(request, _templates, state, conn, config) -> HTMLResponse | RedirectResponse:
+    form = await request.form()
+    if not state.csrf.consume(form.get("csrf", "")):
+        return HTMLResponse("invalid or expired CSRF token", status_code=400)
+
+    # MFA step
+    if form.get("login_id"):
+        popped = state.pop_mfa(form["login_id"])
+        if popped is None:
+            return HTMLResponse("MFA session expired, please start over", status_code=400)
+        pending, params = popped
+        try:
+            tokens = garmin_login.resume_login(pending, form.get("mfa_code", ""))
+            return _finish(conn, config, params, tokens, params["_email"])
+        except Exception:  # noqa: BLE001
+            lid = state.put_mfa(pending, params)
+            html = _fill(_tpl("mfa.html"),
+                         {"CSRF": state.csrf.issue(), "LOGIN_ID": lid},
+                         "Incorrect or expired code, try again")
+            return HTMLResponse(html, status_code=400)
+
+    # login step
+    params = _oauth_params_from(form)
+    client = store.get_client(conn, params["client_id"])
+    if client is None or not security.validate_redirect_uri(params["redirect_uri"], client["redirect_uris"]):
+        return HTMLResponse("invalid client/redirect_uri", status_code=400)
+    email = form.get("garmin_email", "")
+    password = form.get("garmin_password", "")
+    try:
+        result = garmin_login.start_login(email, password)
+    except Exception:  # noqa: BLE001
+        del password
+        return render_authorize(params, state.csrf.issue(), "Garmin sign-in failed, check your credentials")
+    del password  # discard immediately
+    if result.status == "needs_mfa":
+        params = {**params, "_email": email}
+        lid = state.put_mfa(result.pending, params)
+        html = _fill(_tpl("mfa.html"), {"CSRF": state.csrf.issue(), "LOGIN_ID": lid}, "")
+        return HTMLResponse(html)
+    try:
+        return _finish(conn, config, params, result.tokens_json, email)
+    except garmin_login.GarminLoginError:
+        return render_authorize(params, state.csrf.issue(), "Garmin sign-in could not be verified")

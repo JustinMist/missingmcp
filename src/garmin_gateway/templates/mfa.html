@@ -1,0 +1,16 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Garmin MFA</title>
+<style>body{font-family:system-ui;max-width:26rem;margin:4rem auto;padding:0 1rem}
+input{display:block;width:100%;padding:.6rem;margin:.4rem 0 1rem;box-sizing:border-box}
+button{padding:.6rem 1rem}.err{color:#b00}</style></head>
+<body>
+<h1>Enter your MFA code</h1>
+<p>Garmin sent a verification code to your email or phone.</p>
+{ERROR}
+<form method="post" action="/oauth/authorize">
+  <input type="hidden" name="csrf" value="{CSRF}">
+  <input type="hidden" name="login_id" value="{LOGIN_ID}">
+  <label>MFA code<input name="mfa_code" inputmode="numeric" required></label>
+  <button type="submit">Verify</button>
+</form>
+</body></html>

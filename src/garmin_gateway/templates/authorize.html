@@ -1,0 +1,22 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Connect Garmin</title>
+<style>body{font-family:system-ui;max-width:26rem;margin:4rem auto;padding:0 1rem}
+input{display:block;width:100%;padding:.6rem;margin:.4rem 0 1rem;box-sizing:border-box}
+button{padding:.6rem 1rem}.err{color:#b00}</style></head>
+<body>
+<h1>Connect your Garmin account</h1>
+<p>Sign in with your Garmin Connect credentials. Your password is used once to
+authenticate and is never stored.</p>
+{ERROR}
+<form method="post" action="/oauth/authorize">
+  <input type="hidden" name="csrf" value="{CSRF}">
+  <input type="hidden" name="client_id" value="{CLIENT_ID}">
+  <input type="hidden" name="redirect_uri" value="{REDIRECT_URI}">
+  <input type="hidden" name="state" value="{STATE}">
+  <input type="hidden" name="code_challenge" value="{CODE_CHALLENGE}">
+  <input type="hidden" name="code_challenge_method" value="{METHOD}">
+  <label>Garmin email<input name="garmin_email" type="email" required></label>
+  <label>Garmin password<input name="garmin_password" type="password" required></label>
+  <button type="submit">Sign in</button>
+</form>
+</body></html>
