@@ -7,7 +7,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 import httpx
-from .log import log, log_warn
+from .log import log
 
 _SAFE = re.compile(r"[^A-Za-z0-9_.@-]")
 
@@ -80,11 +80,14 @@ class WorkerManager:
 
     def _materialize_tokens(self, key: str, tokens_json: str) -> str:
         safe = _SAFE.sub("_", key)
-        token_dir = os.path.join(self._cfg.data_dir, "users", safe, "tokens")
+        user_dir = os.path.join(self._cfg.data_dir, "users", safe)
+        token_dir = os.path.join(user_dir, "tokens")
         os.makedirs(token_dir, exist_ok=True)
-        os.chmod(os.path.join(self._cfg.data_dir, "users", safe), 0o700)
+        os.chmod(user_dir, 0o700)
+        os.chmod(token_dir, 0o700)
         path = os.path.join(token_dir, "garmin_tokens.json")
-        with open(path, "w") as f:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
             f.write(tokens_json)
         os.chmod(path, 0o600)
         return token_dir
@@ -118,7 +121,7 @@ class WorkerManager:
             async with httpx.AsyncClient(timeout=2.0) as c:
                 r = await c.get(f"http://127.0.0.1:{port}/healthz")
                 return r.status_code == 200
-        except httpx.HTTPError:
+        except (httpx.HTTPError, OSError):
             return False
 
     async def _wait_healthy(self, port: int, proc) -> bool:

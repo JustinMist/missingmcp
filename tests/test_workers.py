@@ -1,3 +1,5 @@
+import os
+import stat
 import time
 import pytest
 from garmin_gateway import workers
@@ -61,3 +63,13 @@ async def test_reap_idle_terminates(tmp_path, fake_worker):
     clock[0] = 1100.0                              # advance past idle ttl
     await mgr.reap_idle()
     assert proc.alive is False
+
+
+async def test_materialize_tokens_sets_secure_perms(tmp_path):
+    cfg = _config(tmp_path)
+    mgr = workers.WorkerManager(cfg, spawn=lambda *a: None)
+    token_dir = mgr._materialize_tokens("Me@X.cz", '{"t":1}')
+    tok_file = os.path.join(token_dir, "garmin_tokens.json")
+    assert stat.S_IMODE(os.stat(tok_file).st_mode) == 0o600
+    assert stat.S_IMODE(os.stat(token_dir).st_mode) == 0o700
+    assert stat.S_IMODE(os.stat(os.path.dirname(token_dir)).st_mode) == 0o700
