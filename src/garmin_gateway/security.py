@@ -12,8 +12,16 @@ _SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
 
 def security_headers() -> dict[str, str]:
+    # NOTE: no `form-action` directive. This is an OAuth authorization server:
+    # the login/MFA form POSTs to /oauth/authorize and the server replies with a
+    # 302 to the client's registered redirect_uri (an arbitrary origin/port, e.g.
+    # http://localhost:3118/callback for the Claude Code CLI). `form-action 'self'`
+    # makes the browser block that cross-origin redirect after the form POST, so
+    # the auth code never reaches the client's callback. Redirect safety is
+    # enforced by validate_redirect_uri() (exact match against the DCR-registered
+    # URIs), not by CSP.
     return {
-        "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'self'",
+        "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'",
         "Strict-Transport-Security": "max-age=63072000; includeSubDomains",
         "X-Frame-Options": "DENY",
         "X-Content-Type-Options": "nosniff",

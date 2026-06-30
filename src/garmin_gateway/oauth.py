@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import urlencode
 from starlette.responses import JSONResponse, HTMLResponse, RedirectResponse
 from . import store, security, garmin_login
+from .log import log, log_error, log_exc
 
 _TPL_DIR = Path(__file__).parent / "templates"
 
@@ -136,30 +137,41 @@ def _finish(conn, config, params: dict, tokens_json: str, email: str) -> Redirec
 
 async def authorize_post(request, _templates, state, conn, config) -> HTMLResponse | RedirectResponse:
     form = await request.form()
+    has_login_id = bool(form.get("login_id"))
+    log("authorize-post", step="mfa" if has_login_id else "login",
+        has_csrf=bool(form.get("csrf")), client_id=form.get("client_id", ""))
     if not state.csrf.consume(form.get("csrf", "")):
+        log_error("authorize-csrf-invalid", step="mfa" if has_login_id else "login")
         return HTMLResponse("invalid or expired CSRF token", status_code=400)
 
     # MFA step
-    if form.get("login_id"):
+    if has_login_id:
         popped = state.pop_mfa(form["login_id"])
         if popped is None:
+            log_error("mfa-session-missing", login_id=form.get("login_id", "")[:6])
             return HTMLResponse("MFA session expired, please start over", status_code=400)
         pending, params = popped
         client = store.get_client(conn, params["client_id"])
         if client is None or not security.validate_redirect_uri(params["redirect_uri"], client["redirect_uris"]):
             return HTMLResponse("invalid client/redirect_uri", status_code=400)
         try:
+            log("mfa-resume-start", mfa_len=len(form.get("mfa_code", "")))
             tokens = garmin_login.resume_login(pending, form.get("mfa_code", ""))
-        except Exception:  # noqa: BLE001 - wrong/expired MFA code: re-prompt
+            log("mfa-resume-ok", tokens_len=len(tokens or ""))
+        except Exception as e:  # noqa: BLE001 - wrong/expired MFA code: re-prompt
+            log_exc("mfa-resume-failed", e, error_type=type(e).__name__, error=str(e))
             lid = state.put_mfa(pending, params)
             body = _fill(_tpl("mfa.html"),
                          {"CSRF": state.csrf.issue(), "LOGIN_ID": lid},
                          "Incorrect or expired code, try again")
             return HTMLResponse(body, status_code=400)
         try:
-            garmin_login.verify_tokens(tokens)
-        except garmin_login.GarminLoginError:  # tokens didn't authenticate: start over
+            name = garmin_login.verify_tokens(tokens)
+            log("mfa-verify-ok", name=name)
+        except garmin_login.GarminLoginError as e:  # tokens didn't authenticate: start over
+            log_exc("mfa-verify-failed", e, error=str(e))
             return render_authorize(params, state.csrf.issue(), "Garmin sign-in could not be verified")
+        log("authorize-finish", step="mfa")
         return _finish(conn, config, params, tokens, params["_email"])
 
     # login step
@@ -170,9 +182,12 @@ async def authorize_post(request, _templates, state, conn, config) -> HTMLRespon
     email = form.get("garmin_email", "")
     password = form.get("garmin_password", "")
     try:
+        log("login-start", email=email)
         result = garmin_login.start_login(email, password)
-    except Exception:  # noqa: BLE001
+        log("login-start-result", status=result.status)
+    except Exception as e:  # noqa: BLE001
         del password
+        log_exc("login-start-failed", e, error_type=type(e).__name__, error=str(e))
         return render_authorize(params, state.csrf.issue(), "Garmin sign-in failed, check your credentials")
     del password  # discard immediately
     if result.status == "needs_mfa":
@@ -181,26 +196,37 @@ async def authorize_post(request, _templates, state, conn, config) -> HTMLRespon
         body = _fill(_tpl("mfa.html"), {"CSRF": state.csrf.issue(), "LOGIN_ID": lid}, "")
         return HTMLResponse(body)
     try:
-        garmin_login.verify_tokens(result.tokens_json)
-    except garmin_login.GarminLoginError:
+        name = garmin_login.verify_tokens(result.tokens_json)
+        log("login-verify-ok", name=name)
+    except garmin_login.GarminLoginError as e:
+        log_exc("login-verify-failed", e, error=str(e))
         return render_authorize(params, state.csrf.issue(), "Garmin sign-in could not be verified")
+    log("authorize-finish", step="login")
     return _finish(conn, config, params, result.tokens_json, email)
 
 
 async def token_exchange(request, conn) -> JSONResponse:
     form = await request.form()
+    log("token-exchange", grant_type=form.get("grant_type", ""),
+        client_id=form.get("client_id", ""), redirect_uri=form.get("redirect_uri", ""))
     if form.get("grant_type") != "authorization_code":
+        log_error("token-bad-grant", grant_type=form.get("grant_type", ""))
         return JSONResponse({"error": "unsupported_grant_type"}, status_code=400)
     client = store.get_client(conn, form.get("client_id", ""))
     if client is None or store.hash_token(form.get("client_secret", "")) != client["client_secret_hash"]:
+        log_error("token-invalid-client", client_known=client is not None)
         return JSONResponse({"error": "invalid_client"}, status_code=401)
     row = store.consume_code(conn, store.hash_token(form.get("code", "")))
     if row is None:
+        log_error("token-invalid-grant", reason="code_not_found_or_expired")
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
     if row["client_id"] != form.get("client_id") or row["redirect_uri"] != form.get("redirect_uri"):
+        log_error("token-invalid-grant", reason="client_or_redirect_mismatch")
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
     if not security.verify_pkce(form.get("code_verifier", ""), row["code_challenge"], row["code_challenge_method"]):
+        log_error("token-invalid-grant", reason="pkce_mismatch")
         return JSONResponse({"error": "invalid_grant"}, status_code=400)
     token = security.new_secret(32)
     store.create_access_token(conn, store.hash_token(token), row["garmin_user_key"], form.get("client_id"))
+    log("token-issued", garmin_user_key=row["garmin_user_key"])
     return JSONResponse({"access_token": token, "token_type": "Bearer"})

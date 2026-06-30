@@ -3,6 +3,8 @@ __pycache__/
 .venv/
 .env
 data/
+.localdata/
+*.log
 *.db
 *.db-wal
 *.db-shm

@@ -20,6 +20,16 @@ def test_pkce_plain_rejected():
     assert not security.verify_pkce("v", "v", "plain")
 
 
+def test_csp_has_no_form_action():
+    # An OAuth authorization server must 302 the login/MFA form POST to the
+    # client's registered redirect_uri (a different origin). `form-action 'self'`
+    # makes browsers block that cross-origin redirect, breaking the auth-code
+    # callback. Redirect safety is enforced by validate_redirect_uri() instead.
+    csp = security.security_headers()["Content-Security-Policy"]
+    assert "form-action" not in csp
+    assert "default-src 'self'" in csp
+
+
 def test_redirect_uri_allowlist():
     allowed = ["https://claude.ai/cb"]
     assert security.validate_redirect_uri("https://claude.ai/cb", allowed)

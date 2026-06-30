@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import contextlib
+import os
 from pathlib import Path
 from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse
@@ -36,6 +37,12 @@ def build_app(config: Config) -> Starlette:
 
     async def home(request):
         return HTMLResponse(landing)
+
+    async def notfound(request):
+        # Catch-all for unknown GET paths: show the instructional landing page
+        # (humans see how to connect) but with a 404 so API/discovery clients
+        # still read it as "not here".
+        return HTMLResponse(landing, status_code=404)
 
     async def healthz(request):
         return PlainTextResponse("ok")
@@ -100,13 +107,38 @@ def build_app(config: Config) -> Starlette:
         Route("/mcp", mcp("POST"), methods=["POST"]),
         Route("/mcp", mcp("GET"), methods=["GET"]),
         Route("/mcp", mcp("DELETE"), methods=["DELETE"]),
+        # Catch-all (must stay last): unknown GET paths get the landing page.
+        Route("/{path:path}", notfound, methods=["GET"]),
     ]
     app = Starlette(routes=routes, lifespan=lifespan)
     app.add_middleware(SecurityHeadersMiddleware)
     return app
 
 
+def _load_dotenv(path: str = ".env") -> None:
+    """Minimal .env loader for running outside Docker (compose uses env_file).
+    Real environment variables take precedence over .env values."""
+    try:
+        with open(path, encoding="utf-8") as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key, val = key.strip(), val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+            val = val[1:-1]
+        os.environ.setdefault(key, val)
+
+
 def main() -> None:
     import uvicorn
+    from .log import setup_logging, resolve_log_level
+    _load_dotenv()
+    setup_logging()
     config = load_config()
-    uvicorn.run(build_app(config), host="0.0.0.0", port=config.port)
+    uvicorn.run(build_app(config), host="0.0.0.0", port=config.port,
+                log_level=resolve_log_level())

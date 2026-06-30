@@ -7,7 +7,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 import httpx
-from .log import log
+from .log import log, log_exc
 
 _SAFE = re.compile(r"[^A-Za-z0-9_.@-]")
 
@@ -45,8 +45,18 @@ class WorkerManager:
             self._enforce_cap()
             token_dir = self._materialize_tokens(key, tokens_json)
             port = self._alloc_port()
-            proc = self._spawn_fn(key, port, token_dir)
+            log("worker-spawn", port=port, cmd=" ".join(self._cfg.garmin_mcp_cmd),
+                token_dir=token_dir)
+            try:
+                proc = self._spawn_fn(key, port, token_dir)
+            except Exception as e:  # noqa: BLE001 - spawn failed (e.g. binary not on PATH)
+                log_exc("worker-spawn-failed", e, error=str(e),
+                        cmd=" ".join(self._cfg.garmin_mcp_cmd))
+                raise WorkerStartError(f"spawn failed: {type(e).__name__}") from e
             if not await self._wait_healthy(port, proc):
+                rc = proc.poll()
+                log("worker-unhealthy", port=port, returncode=rc,
+                    startup_timeout=self._cfg.worker_startup_timeout)
                 try:
                     proc.terminate()
                 except Exception:  # noqa: BLE001

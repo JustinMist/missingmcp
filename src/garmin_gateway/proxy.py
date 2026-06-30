@@ -3,7 +3,7 @@ import httpx
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from . import store, security
 from .workers import WorkerStartError
-from .log import log_error
+from .log import log, log_error, log_exc
 
 
 async def authenticate(request, conn, rate) -> "str | Response":
@@ -23,8 +23,10 @@ async def authenticate(request, conn, rate) -> "str | Response":
 
 
 async def handle_mcp(request, method, conn, manager, config, secret, rate) -> Response:
+    log("mcp-request", method=method, has_session=bool(request.headers.get("mcp-session-id")))
     auth = await authenticate(request, conn, rate)
     if isinstance(auth, Response):
+        log("mcp-auth-rejected", method=method, status=auth.status_code)
         return auth
     key = auth
 
@@ -37,8 +39,11 @@ async def handle_mcp(request, method, conn, manager, config, secret, rate) -> Re
         return JSONResponse({"error": "unknown_account"}, status_code=401)
 
     try:
+        log("worker-ensure-start")
         port = await manager.ensure_worker(key, tokens)
-    except WorkerStartError:
+        log("worker-ensure-ok", port=port)
+    except WorkerStartError as e:
+        log_exc("worker-start-failed", e, error=str(e))
         return JSONResponse(
             {"error": "garmin_session_expired",
              "message": "Your Garmin session expired. Please reconnect the Garmin MCP server."},
