@@ -8,6 +8,7 @@ ENV GARMIN_MCP_REF=${GARMIN_MCP_REF}
 
 COPY pyproject.toml ./
 COPY src ./src
+COPY scripts ./scripts
 RUN uv pip install --system . && \
     uv pip install --system "garmin-mcp @ git+https://github.com/Taxuspt/garmin_mcp@${GARMIN_MCP_REF}"
 
