@@ -154,7 +154,16 @@ class WorkerManager:
             "GARMIN_MCP_PORT": str(port),
             "GARMINTOKENS": token_dir,
         })
-        return subprocess.Popen(self._cfg.garmin_mcp_cmd, env=env)
+        # Redirect the worker's own (chatty, unstructured) stdout/stderr to a
+        # per-user file so it doesn't interleave with the gateway's structured
+        # log. The child inherits the fd; we close our copy after spawning.
+        log_path = os.path.join(os.path.dirname(token_dir), "worker.log")
+        logf = open(log_path, "a", encoding="utf-8")
+        try:
+            return subprocess.Popen(self._cfg.garmin_mcp_cmd, env=env,
+                                    stdout=logf, stderr=subprocess.STDOUT)
+        finally:
+            logf.close()
 
     def _terminate(self, h: WorkerHandle) -> None:
         try:

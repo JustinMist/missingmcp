@@ -147,5 +147,7 @@ def main() -> None:
     _load_dotenv()
     setup_logging()
     config = load_config()
+    # access_log off: we emit our own structured mcp-request events; uvicorn's
+    # per-request "POST /mcp 200" lines would just duplicate them.
     uvicorn.run(build_app(config), host="0.0.0.0", port=config.port,
-                log_level=resolve_log_level())
+                log_level=resolve_log_level(), access_log=False)

@@ -114,9 +114,11 @@ docker compose logs -f gateway | grep '"event": "stats"'
 > container the logs also go to stdout, so `docker compose logs -f` is usually the
 > easiest live view.
 
-The gateway also logs a `stats` event (accounts / tokens / people-with-token /
-clients / active-workers) on startup and whenever those counts change, and
-`status.py` lists the running per-user `garmin_mcp` workers.
+The gateway's own log is structured JSON (one event per line). Each per-user
+worker's verbose output is kept out of it, in `DATA_DIR/users/<account>/worker.log`
+(look there to debug a specific worker). The gateway also logs a `stats` event
+(accounts / tokens / people-with-token / clients / active-workers) on startup and
+whenever those counts change, and `status.py` lists the running workers.
 
 ## How it works
 
