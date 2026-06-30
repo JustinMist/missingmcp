@@ -57,3 +57,22 @@ def test_csrf_expires():
     tok = cs.issue()
     clock[0] = 11
     assert not cs.consume(tok)
+
+
+class _FakeStreamRequest:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    async def stream(self):
+        for c in self._chunks:
+            yield c
+
+
+async def test_read_body_limited_under_limit_returns_body():
+    req = _FakeStreamRequest([b"hello", b"world"])
+    assert await security.read_body_limited(req, max_bytes=100) == b"helloworld"
+
+
+async def test_read_body_limited_over_limit_returns_none():
+    req = _FakeStreamRequest([b"a" * 60, b"b" * 60])  # 120 bytes > 100
+    assert await security.read_body_limited(req, max_bytes=100) is None
