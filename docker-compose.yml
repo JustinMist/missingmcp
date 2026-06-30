@@ -1,0 +1,16 @@
+services:
+  gateway:
+    build:
+      context: .
+      args:
+        GARMIN_MCP_REF: ${GARMIN_MCP_REF:-main}
+    init: true                       # reap worker subprocesses
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8080:8080"        # nginx (host) proxies to this
+    volumes:
+      - gateway-data:/data
+
+volumes:
+  gateway-data:
