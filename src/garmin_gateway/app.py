@@ -56,7 +56,7 @@ def build_app(config: Config) -> Starlette:
         return await oauth.register_client(request, conn)
 
     async def authz_get(request):
-        return await oauth.authorize_get(request, None, auth_state, conn)
+        return await oauth.authorize_get(request, None, auth_state, conn, config)
 
     async def authz_post(request):
         if not rate.check(f"login:{request.client.host}", 5, 60):

@@ -8,7 +8,8 @@ button{padding:.6rem 1rem}.err{color:#b00}
 <h1>Enter your MFA code</h1>
 <p>Garmin sent a verification code to your email or phone.</p>
 <div class="note">The code is used once to finish signing in to Garmin and is not
-stored. Only the resulting encrypted session tokens are kept.</div>
+stored. Only the resulting encrypted session tokens are kept. This gateway is
+operated by <strong>{OPERATOR_NAME}{OPERATOR_EMAIL}</strong>.</div>
 {ERROR}
 <form method="post" action="/oauth/authorize">
   <input type="hidden" name="csrf" value="{CSRF}">

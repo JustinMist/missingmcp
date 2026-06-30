@@ -67,7 +67,7 @@ def test_register_rejects_empty_string_redirect_uri(conn):
 def _authz_app(conn):
     state = oauth.AuthState(security.CsrfStore())
     async def aget(request):
-        return await oauth.authorize_get(request, None, state, conn)
+        return await oauth.authorize_get(request, None, state, conn, CONFIG)
     async def apost(request):
         return await oauth.authorize_post(request, None, state, conn, CONFIG)
     app = Starlette(routes=[

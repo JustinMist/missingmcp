@@ -87,7 +87,14 @@ def _fill(template: str, mapping: dict, error: str = "") -> str:
     return out
 
 
-def render_authorize(params: dict, csrf_token: str, error: str = "") -> HTMLResponse:
+def _operator_fields(config) -> dict:
+    return {
+        "OPERATOR_NAME": config.operator_name,
+        "OPERATOR_EMAIL": f" ({config.operator_email})" if config.operator_email else "",
+    }
+
+
+def render_authorize(params: dict, csrf_token: str, config, error: str = "") -> HTMLResponse:
     body = _fill(_tpl("authorize.html"), {
         "CSRF": csrf_token,
         "CLIENT_ID": params.get("client_id", ""),
@@ -95,6 +102,7 @@ def render_authorize(params: dict, csrf_token: str, error: str = "") -> HTMLResp
         "STATE": params.get("state", ""),
         "CODE_CHALLENGE": params.get("code_challenge", ""),
         "METHOD": params.get("code_challenge_method", ""),
+        **_operator_fields(config),
     }, error)
     return HTMLResponse(body)
 
@@ -109,7 +117,7 @@ def _oauth_params_from(source) -> dict:
     }
 
 
-async def authorize_get(request, _templates, state, conn) -> HTMLResponse:
+async def authorize_get(request, _templates, state, conn, config) -> HTMLResponse:
     params = _oauth_params_from(request.query_params)
     client = store.get_client(conn, params["client_id"])
     if client is None:
@@ -118,7 +126,7 @@ async def authorize_get(request, _templates, state, conn) -> HTMLResponse:
         return HTMLResponse("invalid redirect_uri", status_code=400)
     if params["code_challenge_method"] != "S256" or not params["code_challenge"]:
         return HTMLResponse("PKCE S256 required", status_code=400)
-    return render_authorize(params, state.csrf.issue())
+    return render_authorize(params, state.csrf.issue(), config)
 
 
 def _finish(conn, config, params: dict, tokens_json: str, email: str) -> RedirectResponse:
@@ -162,7 +170,7 @@ async def authorize_post(request, _templates, state, conn, config) -> HTMLRespon
             log_exc("mfa-resume-failed", e, error_type=type(e).__name__, error=str(e))
             lid = state.put_mfa(pending, params)
             body = _fill(_tpl("mfa.html"),
-                         {"CSRF": state.csrf.issue(), "LOGIN_ID": lid},
+                         {"CSRF": state.csrf.issue(), "LOGIN_ID": lid, **_operator_fields(config)},
                          "Incorrect or expired code, try again")
             return HTMLResponse(body, status_code=400)
         try:
@@ -170,7 +178,7 @@ async def authorize_post(request, _templates, state, conn, config) -> HTMLRespon
             log("mfa-verify-ok", name=name)
         except garmin_login.GarminLoginError as e:  # tokens didn't authenticate: start over
             log_exc("mfa-verify-failed", e, error=str(e))
-            return render_authorize(params, state.csrf.issue(), "Garmin sign-in could not be verified")
+            return render_authorize(params, state.csrf.issue(), config, "Garmin sign-in could not be verified")
         log("authorize-finish", step="mfa")
         return _finish(conn, config, params, tokens, params["_email"])
 
@@ -188,7 +196,7 @@ async def authorize_post(request, _templates, state, conn, config) -> HTMLRespon
     except Exception as e:  # noqa: BLE001
         del password
         log_exc("login-start-failed", e, error_type=type(e).__name__, error=str(e))
-        return render_authorize(params, state.csrf.issue(), "Garmin sign-in failed, check your credentials")
+        return render_authorize(params, state.csrf.issue(), config, "Garmin sign-in failed, check your credentials")
     del password  # discard immediately
     if result.status == "needs_mfa":
         params = {**params, "_email": email}
@@ -200,7 +208,7 @@ async def authorize_post(request, _templates, state, conn, config) -> HTMLRespon
         log("login-verify-ok", name=name)
     except garmin_login.GarminLoginError as e:
         log_exc("login-verify-failed", e, error=str(e))
-        return render_authorize(params, state.csrf.issue(), "Garmin sign-in could not be verified")
+        return render_authorize(params, state.csrf.issue(), config, "Garmin sign-in could not be verified")
     log("authorize-finish", step="login")
     return _finish(conn, config, params, result.tokens_json, email)
 
