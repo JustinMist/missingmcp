@@ -1,3 +1,4 @@
+import re
 import pytest
 from unittest.mock import patch
 from urllib.parse import urlparse, parse_qs
@@ -137,7 +138,6 @@ def test_login_mfa_then_verify_redirects(conn):
         })
     assert r1.status_code == 200 and "login_id" in r1.text
     # extract login_id and a fresh csrf rendered into the MFA page
-    import re
     login_id = re.search(r'name="login_id" value="([^"]+)"', r1.text).group(1)
     csrf2 = re.search(r'name="csrf" value="([^"]+)"', r1.text).group(1)
     with patch.object(garmin_login, "resume_login", return_value='{"t":9}'), \
@@ -147,3 +147,47 @@ def test_login_mfa_then_verify_redirects(conn):
         })
     assert r2.status_code == 302
     assert store.get_account_tokens(conn, "me@x.cz", CONFIG.gateway_secret) == '{"t":9}'
+
+
+def test_authorize_post_rejects_bad_csrf(conn):
+    client, _ = _authz_app(conn)
+    cid = _register(conn)
+    r = client.post("/oauth/authorize", data={
+        "csrf": "forged", "client_id": cid, "redirect_uri": "https://claude.ai/cb",
+        "state": "xyz", "code_challenge": "abc", "code_challenge_method": "S256",
+        "garmin_email": "me@x.cz", "garmin_password": "pw",
+    })
+    assert r.status_code == 400
+
+
+def test_authorize_get_rejects_non_s256(conn):
+    client, _ = _authz_app(conn)
+    cid = _register(conn)
+    r = client.get("/oauth/authorize", params={
+        "client_id": cid, "redirect_uri": "https://claude.ai/cb",
+        "state": "xyz", "code_challenge": "abc", "code_challenge_method": "plain",
+    })
+    assert r.status_code == 400
+
+
+def test_authorize_get_escapes_reflected_state(conn):
+    client, _ = _authz_app(conn)
+    cid = _register(conn)
+    r = client.get("/oauth/authorize", params={
+        "client_id": cid, "redirect_uri": "https://claude.ai/cb",
+        "state": '"><script>alert(1)</script>', "code_challenge": "abc",
+        "code_challenge_method": "S256",
+    })
+    assert r.status_code == 200
+    assert "<script>" not in r.text  # reflected state must be escaped
+
+
+def test_authorize_post_mfa_rejects_tampered_redirect(conn):
+    client, state = _authz_app(conn)
+    cid = _register(conn)
+    params = {"client_id": cid, "redirect_uri": "https://evil.com/cb", "state": "s",
+              "code_challenge": "abc", "code_challenge_method": "S256", "_email": "me@x.cz"}
+    lid = state.put_mfa(("P", "S"), params)
+    csrf = state.csrf.issue()
+    r = client.post("/oauth/authorize", data={"csrf": csrf, "login_id": lid, "mfa_code": "123456"})
+    assert r.status_code == 400

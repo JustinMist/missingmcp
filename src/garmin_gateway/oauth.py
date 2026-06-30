@@ -1,4 +1,5 @@
 from __future__ import annotations
+import html
 import json
 import time
 from pathlib import Path
@@ -59,8 +60,7 @@ class AuthState:
 
     def put_mfa(self, pending, oauth_params: dict) -> str:
         self._gc()
-        from .security import new_secret
-        lid = new_secret(18)
+        lid = security.new_secret(18)
         self._mfa[lid] = (pending, oauth_params, time.monotonic())
         return lid
 
@@ -80,14 +80,14 @@ class AuthState:
 
 
 def _fill(template: str, mapping: dict, error: str = "") -> str:
-    out = template.replace("{ERROR}", f'<p class="err">{error}</p>' if error else "")
+    out = template.replace("{ERROR}", f'<p class="err">{html.escape(error)}</p>' if error else "")
     for k, v in mapping.items():
-        out = out.replace("{" + k + "}", v)
+        out = out.replace("{" + k + "}", html.escape(v, quote=True))
     return out
 
 
 def render_authorize(params: dict, csrf_token: str, error: str = "") -> HTMLResponse:
-    html = _fill(_tpl("authorize.html"), {
+    body = _fill(_tpl("authorize.html"), {
         "CSRF": csrf_token,
         "CLIENT_ID": params.get("client_id", ""),
         "REDIRECT_URI": params.get("redirect_uri", ""),
@@ -95,7 +95,7 @@ def render_authorize(params: dict, csrf_token: str, error: str = "") -> HTMLResp
         "CODE_CHALLENGE": params.get("code_challenge", ""),
         "METHOD": params.get("code_challenge_method", ""),
     }, error)
-    return HTMLResponse(html)
+    return HTMLResponse(body)
 
 
 def _oauth_params_from(source) -> dict:
@@ -145,15 +145,18 @@ async def authorize_post(request, _templates, state, conn, config) -> HTMLRespon
         if popped is None:
             return HTMLResponse("MFA session expired, please start over", status_code=400)
         pending, params = popped
+        client = store.get_client(conn, params["client_id"])
+        if client is None or not security.validate_redirect_uri(params["redirect_uri"], client["redirect_uris"]):
+            return HTMLResponse("invalid client/redirect_uri", status_code=400)
         try:
             tokens = garmin_login.resume_login(pending, form.get("mfa_code", ""))
             return _finish(conn, config, params, tokens, params["_email"])
         except Exception:  # noqa: BLE001
             lid = state.put_mfa(pending, params)
-            html = _fill(_tpl("mfa.html"),
+            body = _fill(_tpl("mfa.html"),
                          {"CSRF": state.csrf.issue(), "LOGIN_ID": lid},
                          "Incorrect or expired code, try again")
-            return HTMLResponse(html, status_code=400)
+            return HTMLResponse(body, status_code=400)
 
     # login step
     params = _oauth_params_from(form)
@@ -171,8 +174,8 @@ async def authorize_post(request, _templates, state, conn, config) -> HTMLRespon
     if result.status == "needs_mfa":
         params = {**params, "_email": email}
         lid = state.put_mfa(result.pending, params)
-        html = _fill(_tpl("mfa.html"), {"CSRF": state.csrf.issue(), "LOGIN_ID": lid}, "")
-        return HTMLResponse(html)
+        body = _fill(_tpl("mfa.html"), {"CSRF": state.csrf.issue(), "LOGIN_ID": lid}, "")
+        return HTMLResponse(body)
     try:
         return _finish(conn, config, params, result.tokens_json, email)
     except garmin_login.GarminLoginError:
