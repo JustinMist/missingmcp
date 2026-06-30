@@ -4,7 +4,9 @@ services:
       context: .
       args:
         GARMIN_MCP_REF: ${GARMIN_MCP_REF:-main}
-    init: true                       # reap worker subprocesses
+    # No `init: true` — tini is the image ENTRYPOINT and runs as PID 1, where it
+    # reaps the worker subprocesses. Adding compose's init too would push tini to
+    # PID 7 (the "Tini is not running as PID 1" warning) and make it a no-op.
     restart: unless-stopped
     env_file: .env
     ports:
