@@ -78,10 +78,16 @@ def build_app(config: Config) -> Starlette:
         stop = asyncio.Event()
 
         async def loop():
+            last_stats = None
             while not stop.is_set():
                 with contextlib.suppress(Exception):
                     await manager.reap_idle()
                     store.cleanup_expired_codes(conn)
+                    stats = {**store.stats_counts(conn),
+                             "active_workers": manager.active_count()}
+                    if stats != last_stats:  # log only when something changed
+                        log("stats", **stats)
+                        last_stats = stats
                 with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(stop.wait(), timeout=60)
 

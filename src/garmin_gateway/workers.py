@@ -74,6 +74,10 @@ class WorkerManager:
                 self._workers.pop(key, None)
                 log("worker-reaped", port=h.port)
 
+    def active_count(self) -> int:
+        """Number of per-user workers currently running (for monitoring)."""
+        return len(self._workers)
+
     def shutdown(self) -> None:
         for h in list(self._workers.values()):
             self._terminate(h)

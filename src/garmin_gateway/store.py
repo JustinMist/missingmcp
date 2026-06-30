@@ -115,6 +115,19 @@ def list_accounts(conn) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def stats_counts(conn) -> dict:
+    """Aggregate counts for monitoring: accounts, issued tokens, distinct people
+    holding a token, registered OAuth clients, pending auth codes."""
+    one = lambda sql: conn.execute(sql).fetchone()[0]  # noqa: E731
+    return {
+        "accounts": one("SELECT COUNT(*) FROM garmin_accounts"),
+        "tokens": one("SELECT COUNT(*) FROM access_tokens"),
+        "people_with_token": one("SELECT COUNT(DISTINCT garmin_user_key) FROM access_tokens"),
+        "clients": one("SELECT COUNT(*) FROM oauth_clients"),
+        "pending_codes": one("SELECT COUNT(*) FROM oauth_codes"),
+    }
+
+
 # --- access tokens --------------------------------------------------------
 
 # Access tokens have no TTL and are not auto-revoked. To revoke a device,

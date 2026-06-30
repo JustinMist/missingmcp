@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import sys
+import time
 import traceback
 from typing import Any, TextIO
 
@@ -40,7 +41,7 @@ def setup_logging(path: str | None = None) -> None:
 
 
 def _emit(level: str, event: str, fields: dict[str, Any]) -> None:
-    record = {"level": level, "event": event}
+    record = {"ts": time.strftime("%H:%M:%S"), "level": level, "event": event}
     for k, v in fields.items():
         record[k] = v if isinstance(v, (str, int, float, bool)) or v is None else str(v)
     line = json.dumps(record) + "\n"

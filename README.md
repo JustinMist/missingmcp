@@ -89,6 +89,22 @@ Set via environment (or `.env`). See [`.env.example`](.env.example).
 | `GATEWAY_LOG_FILE` | no | — | If set, tees structured + stdlib logs to this file. |
 | `GATEWAY_LOG_LEVEL` | no | `info` | `debug`\|`info`\|`warning`\|`error`\|`critical`. `debug` is verbose (logs garminconnect/urllib3 internals) — avoid in production. |
 
+## Monitoring
+
+Two helper scripts read the gateway's state (set `GATEWAY_LOG_FILE` so events are
+logged — it's in `.env` for local dev):
+
+```bash
+python scripts/status.py            # snapshot: how many people have a token,
+                                    # devices connected, registered clients
+python scripts/monitor.py           # live tail of structured events
+                                    #   (mcp-request, worker-spawn, token-issued, …)
+python scripts/monitor.py --all     # include garminconnect/urllib3 debug noise
+```
+
+The gateway also logs a `stats` event (accounts / tokens / people-with-token /
+clients / active-workers) on startup and whenever those counts change.
+
 ## How it works
 
 1. Claude registers a client (DCR) and starts OAuth 2.1 (Authorization Code + PKCE).
