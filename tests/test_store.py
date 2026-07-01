@@ -73,6 +73,18 @@ def test_revoke_account_and_token(conn):
     assert store.revoke_token(conn, "nope") == 0
 
 
+def test_record_usage_counts(conn):
+    store.record_usage(conn, "me@x.cz", "get_activities")
+    store.record_usage(conn, "me@x.cz", "get_activities")
+    store.record_usage(conn, "me@x.cz", "tools/list")
+    store.record_usage(conn, "other@x.cz", "get_activities")
+    rows = {r["tool"]: r["calls"] for r in conn.execute(
+        "SELECT tool, calls FROM tool_usage WHERE garmin_user_key='me@x.cz'")}
+    assert rows == {"get_activities": 2, "tools/list": 1}
+    total = conn.execute("SELECT SUM(calls) FROM tool_usage WHERE tool='get_activities'").fetchone()[0]
+    assert total == 3
+
+
 def test_client_roundtrip(conn):
     store.create_client(conn, "c1", "secret_hash", ["https://a/cb", "https://b/cb"], "Claude")
     c = store.get_client(conn, "c1")

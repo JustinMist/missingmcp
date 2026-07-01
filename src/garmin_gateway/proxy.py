@@ -1,9 +1,32 @@
 from __future__ import annotations
+import json
 import httpx
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from . import store, security
 from .workers import WorkerStartError
 from .log import log, log_error, log_exc
+
+
+def _mcp_tool(body) -> "str | None":
+    """Extract the tool/method name from an MCP JSON-RPC request body for usage
+    metrics — a tools/call name (e.g. get_activities) or the method (initialize,
+    tools/list, ...). Returns None for empty/unparseable/batch bodies. Never
+    inspects request arguments or data."""
+    if not body:
+        return None
+    try:
+        d = json.loads(body)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    method = d.get("method")
+    if not isinstance(method, str):
+        return None
+    if method == "tools/call":
+        name = (d.get("params") or {}).get("name")
+        return name if isinstance(name, str) else "tools/call"
+    return method
 
 
 async def authenticate(request, conn, rate) -> "str | Response":
@@ -37,6 +60,13 @@ async def handle_mcp(request, method, conn, manager, config, secret, rate) -> Re
     tokens = store.get_account_tokens(conn, key, secret)
     if tokens is None:
         return JSONResponse({"error": "unknown_account"}, status_code=401)
+
+    tool = _mcp_tool(body)
+    if tool:
+        try:
+            store.record_usage(conn, key, tool)
+        except Exception:  # noqa: BLE001 - usage metrics must never break a request
+            pass
 
     try:
         log("worker-ensure-start")

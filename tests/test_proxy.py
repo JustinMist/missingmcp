@@ -45,3 +45,12 @@ def test_authorized_forwards_to_worker(tmp_path, fake_worker):
     assert r.status_code == 200
     assert r.headers.get("mcp-session-id") == "sess-1"
     assert fake_worker.calls and fake_worker.calls[-1][1] == "/mcp"
+
+
+def test_mcp_tool_parsing():
+    assert proxy._mcp_tool(b'{"jsonrpc":"2.0","method":"tools/call","params":{"name":"get_activities"},"id":1}') == "get_activities"
+    assert proxy._mcp_tool(b'{"method":"tools/list","id":2}') == "tools/list"
+    assert proxy._mcp_tool(b'{"method":"tools/call","params":{}}') == "tools/call"
+    assert proxy._mcp_tool(b"") is None
+    assert proxy._mcp_tool(b"not json") is None
+    assert proxy._mcp_tool(b'[{"method":"x"}]') is None  # batch: skipped

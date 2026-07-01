@@ -70,6 +70,13 @@ def init_db(db_path: str) -> sqlite3.Connection:
             expires_at            INTEGER NOT NULL,
             created_at            TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS tool_usage (
+            garmin_user_key TEXT NOT NULL,
+            tool            TEXT NOT NULL,   -- tools/call name, or the MCP method
+            calls           INTEGER NOT NULL DEFAULT 0,
+            last_used       TEXT,
+            PRIMARY KEY (garmin_user_key, tool)
+        );
         """
     )
     conn.commit()
@@ -245,4 +252,19 @@ def consume_code(conn, code_hash) -> dict | None:
 
 def cleanup_expired_codes(conn) -> None:
     conn.execute("DELETE FROM oauth_codes WHERE expires_at < ?", (int(time.time()),))
+    conn.commit()
+
+
+# --- usage metrics --------------------------------------------------------
+
+# Records only the tool/method name and a per-account count — never request
+# contents or any Garmin data.
+def record_usage(conn, key: str, tool: str) -> None:
+    conn.execute(
+        "INSERT INTO tool_usage (garmin_user_key, tool, calls, last_used) "
+        "VALUES (?, ?, 1, datetime('now')) "
+        "ON CONFLICT(garmin_user_key, tool) DO UPDATE SET "
+        "calls = calls + 1, last_used = datetime('now')",
+        (key, tool),
+    )
     conn.commit()
