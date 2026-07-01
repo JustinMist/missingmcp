@@ -160,7 +160,7 @@ whenever those counts change, and `status.py` lists the running workers.
 
 ## Support
 
-If this gateway is useful to you, you can [buy me a coffee ☕](https://buymeacoffee.com/venik).
+If this gateway is useful to you, you can [buy me a beer 🍺](https://buymeacoffee.com/venik).
 
 ## License
 
