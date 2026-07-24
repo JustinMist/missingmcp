@@ -74,17 +74,23 @@ def shutdown() -> None:
 
 def capture(event: str, *, distinct_id: str | None = None,
             properties: dict[str, Any] | None = None,
-            anonymous: bool = False) -> None:
+            anonymous: bool = False, timestamp: Any = None) -> None:
     """Non-blocking enqueue of one event. distinct_id=None → personless event
     (SDK generates a UUID); anonymous=True keeps the event out of person
-    profiles (and on anonymous-event pricing)."""
+    profiles (and on anonymous-event pricing). timestamp (a datetime) backdates
+    the event to when it actually happened (e.g. a hand-entered beer's purchase
+    date) — passed to the SDK only when given, so existing call sites are
+    unchanged."""
     if _client is None:
         return
     props = dict(properties or {})
     if anonymous:
         props["$process_person_profile"] = False
+    kwargs: dict[str, Any] = {"distinct_id": distinct_id, "properties": props}
+    if timestamp is not None:
+        kwargs["timestamp"] = timestamp
     try:
-        _client.capture(event, distinct_id=distinct_id, properties=props)
+        _client.capture(event, **kwargs)
     except Exception:  # noqa: BLE001 - telemetry must never break a request
         pass
 

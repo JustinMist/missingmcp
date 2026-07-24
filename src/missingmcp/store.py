@@ -89,6 +89,16 @@ CREATE TABLE IF NOT EXISTS suggestions (
     wants_updates INTEGER NOT NULL DEFAULT 0,
     created_at    TEXT DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS beers (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    email       TEXT,                       -- supporter email, lowercased; NULL if anonymous
+    beers       INTEGER NOT NULL DEFAULT 1, -- coffee count for this donation
+    amount      REAL,                       -- money value (beers x unit price)
+    currency    TEXT,
+    matched     INTEGER NOT NULL DEFAULT 0, -- 1 if email matched an account_key
+    source      TEXT NOT NULL DEFAULT 'manual',
+    created_at  TEXT DEFAULT (datetime('now'))  -- purchase time (--at, else now)
+);
 """
 
 # One-time transform from the pre-adapter (v0) schema. Ciphertext moves verbatim.
@@ -468,3 +478,31 @@ def list_suggestions(conn) -> list[dict]:
         "FROM suggestions ORDER BY created_at"
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+# --- beer supporters ------------------------------------------------------
+# Local audit/record of "buy me a beer" donations, entered manually (scripts/
+# add_beer.py). Feeds no website counter — the operator's numbers live in
+# PostHog (the beer_purchased event). See the 2026-07-24 beer-supporters spec.
+
+def account_key_exists(conn, email: str) -> bool:
+    """True if the (normalized) email is a login account_key under any adapter —
+    the best-effort attribution probe for a beer donation. Same identity the
+    connect funnel keys on (distinct_id = plain login email)."""
+    return conn.execute(
+        "SELECT 1 FROM accounts WHERE account_key = ? LIMIT 1", (email,)
+    ).fetchone() is not None
+
+
+def add_beer(conn, *, email: str | None, beers: int, amount: float | None,
+             currency: str | None, matched: int, source: str,
+             created_at: str) -> int:
+    """Insert one donation row; returns the new row id (used to build the
+    anonymous synthetic distinct_id, `manual:anon:<id>`)."""
+    cur = conn.execute(
+        "INSERT INTO beers (email, beers, amount, currency, matched, source, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (email, beers, amount, currency, matched, source, created_at),
+    )
+    conn.commit()
+    return cur.lastrowid

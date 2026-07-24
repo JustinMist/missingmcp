@@ -232,6 +232,8 @@ python scripts/subscribers.py                         # newsletter signups + sug
 python scripts/subscribers.py --emails                # subscriber emails, one per line
 python scripts/daily_report.py                        # yesterday's new/active/total users (print)
 python scripts/daily_report.py --post                 # + POST it to Slack ($SLACK_WEBHOOK_URL)
+python scripts/add_beer.py --email <supporter>        # record a "buy me a beer" donation (1 beer, 5 EUR)
+python scripts/add_beer.py --email <supporter> --beers 3 --at 2026-07-20  # 3 beers, backdated
 ```
 
 The gateway also posts this daily user-stats report to Slack on its own each
@@ -265,6 +267,17 @@ fire-and-forget: a PostHog outage never blocks a request. The Slack reports
 above keep running unchanged — PostHog complements them. When off-boarding a
 user (`revoke.py --purge`), also delete the person in PostHog (People → delete)
 to complete the GDPR path.
+
+**Beer supporters** — `scripts/add_beer.py` records a "buy me a beer" donation
+(`buymeacoffee.com/venik`) into a local `beers` audit table and emits a
+`beer_purchased` PostHog event, best-effort attributed to the supporter's
+gateway account (`matched` when the email is a known login). The event is meant to
+feed the operator's connect→paying funnel and "beers this month" metric on the
+Growth dashboard — those PostHog insights are **set up manually** and don't exist
+until built. Ingestion is manual for now (BMC automation deferred; design:
+`docs/superpowers/specs/2026-07-24-beer-supporters.md`). Same egress rule as
+above — the email travels only as `distinct_id`, never the supporter name or
+note.
 
 **With Docker** the scripts are baked into the image at `/app/scripts`; run them
 inside the container. `status.py` finds the DB under `/data` automatically:
