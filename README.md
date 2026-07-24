@@ -271,9 +271,10 @@ to complete the GDPR path.
 **Beer supporters** — `scripts/add_beer.py` records a "buy me a beer" donation
 (`buymeacoffee.com/venik`) into a local `beers` audit table and emits a
 `beer_purchased` PostHog event, best-effort attributed to the supporter's
-gateway account (`matched` when the email is a known login). The event feeds the
-operator's connect→paying funnel and "beers this month" metric on the Growth
-dashboard. Ingestion is manual for now (BMC automation deferred; design:
+gateway account (`matched` when the email is a known login). The event is meant to
+feed the operator's connect→paying funnel and "beers this month" metric on the
+Growth dashboard — those PostHog insights are **set up manually** and don't exist
+until built. Ingestion is manual for now (BMC automation deferred; design:
 `docs/superpowers/specs/2026-07-24-beer-supporters.md`). Same egress rule as
 above — the email travels only as `distinct_id`, never the supporter name or
 note.

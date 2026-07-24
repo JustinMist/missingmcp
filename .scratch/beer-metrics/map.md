@@ -17,7 +17,7 @@ spec is approved.
 
 ## Notes
 
-- **Not a user-facing connector.** This is operator analytics + a public vanity counter, built on
+- **Not a user-facing connector.** This is operator analytics — a PostHog metric, not a public site counter — built on
   the existing Buy Me a Coffee account `buymeacoffee.com/venik` (branded "buy me a beer"). Today
   BMC is only a static outbound link (header button, support section, home support block — in
   `src/missingmcp/templates/_layout.html` and `home.html`); no API, no webhook, no env var.
@@ -28,7 +28,7 @@ spec is approved.
   - Site counter = live from BMC (automatic), not a hand-maintained number.
 - **Interim pivot (2026-07-24):** BMC's developer portal returns nginx 400 (cookie-too-large) and
   won't issue an API token, so **automated BMC ingestion is deferred**. Bridge = **manual operator
-  entry** via a CLI (`scripts/add_beer.py`, run `uv run python -m scripts.add_beer …`) → a SQLite
+  entry** via a CLI (`scripts/add_beer.py`, run `python scripts/add_beer.py …`) → a SQLite
   `beers` record (local audit + future BMC-dedup anchor) + the `beer_purchased` event. **"Beers
   this month" is a PostHog metric, not a site counter** (scope corrected 2026-07-24; ticket 04).
   The event/attribution *design* (ticket 02) is unchanged; only the source is manual. See ticket

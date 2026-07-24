@@ -17,8 +17,9 @@ the critical path for the spec (05).
 ## Question
 
 Manual, operator-only (can't be done AFK — requires logging into the `venik` Buy Me a Coffee
-dashboard). Graduated from ticket 01's Confidence & gaps; **re-scoped by ticket 02's decision
-(API polling only — no webhook)**, so the webhook-provisioning parts are dropped. Before the spec
+dashboard). Graduated from ticket 01's Confidence & gaps; **re-scoped by ticket 02's decision** —
+the interim is now manual CLI ingestion (the earlier API-polling design was itself superseded, and
+webhook was never adopted), so the webhook-provisioning parts are dropped. Before the spec
 (05) names exact wire fields with confidence, confirm from inside BMC:
 
 1. The `venik` account can generate a **personal access token** at

@@ -190,3 +190,23 @@ def test_main_requires_email(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["add_beer.py", "--db", "/nope.db"])
     with pytest.raises(SystemExit):
         add_beer.main()
+
+
+def test_main_rejects_blank_email(monkeypatch):
+    # argparse accepts --email "   "; our guard must reject it before any write
+    monkeypatch.setattr(sys, "argv", ["add_beer.py", "--db", "/nope.db", "--email", "   "])
+    with pytest.raises(SystemExit):
+        add_beer.main()
+
+
+def test_main_rejects_nonpositive_amount(tmp_path, monkeypatch):
+    path = str(tmp_path / "gateway.db")
+    store.init_db(path).close()
+    monkeypatch.setattr(sys, "argv",
+                        ["add_beer.py", "--db", path, "--email", "me@x.cz", "--amount=-5"])
+    with pytest.raises(SystemExit):
+        add_beer.main()
+    ro = sqlite3.connect(path)
+    n = ro.execute("SELECT COUNT(*) FROM beers").fetchone()[0]
+    ro.close()
+    assert n == 0    # rejected before any write

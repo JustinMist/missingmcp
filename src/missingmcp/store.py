@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS beers (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     email       TEXT,                       -- supporter email, lowercased; NULL if anonymous
     beers       INTEGER NOT NULL DEFAULT 1, -- coffee count for this donation
-    amount      REAL,                       -- money value (beers × unit price)
+    amount      REAL,                       -- money value (beers x unit price)
     currency    TEXT,
     matched     INTEGER NOT NULL DEFAULT 0, -- 1 if email matched an account_key
     source      TEXT NOT NULL DEFAULT 'manual',

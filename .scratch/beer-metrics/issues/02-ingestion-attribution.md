@@ -91,9 +91,11 @@ attribution, the `matched` flag, taxonomy, and "beers this month = Σ coffees in
 month." **Only the ingestion source changes**: an operator-run CLI instead of a BMC poll.
 
 **Interim ingestion — `scripts/add_beer.py`** (fits the existing `scripts/` set; invoked
-`uv run python -m scripts.add_beer …` — plain `uv run <script>` doesn't work in this repo):
+`python scripts/add_beer.py …`, the repo's script convention):
 
-- Args: `--email <supporter>`, `--beers <n>` (default 1), `--at <YYYY-MM-DD>` (default today).
+- Args: `--email <supporter>` (**required** — the manual CLI never produces an anonymous beer;
+  that path is reserved for the future BMC writer), `--beers <n>` (default 1),
+  `--at <YYYY-MM-DD>` (default today).
   **Amount is derived by default** — one beer = **5 EUR**, so `amount = beers × 5` and
   `currency = EUR` unless overridden with the optional `--amount` / `--currency`. So the normal
   invocation is just `--email` (+ `--beers` if more than one). The 5 EUR unit price is a manual

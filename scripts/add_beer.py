@@ -32,6 +32,7 @@ Railway, where the script runs:
 """
 from __future__ import annotations
 import argparse
+import math
 import os
 import sys
 from datetime import datetime, timezone
@@ -95,7 +96,7 @@ def main():
     p.add_argument("--email", required=True, help="supporter email (attribution key)")
     p.add_argument("--beers", type=int, default=1, help="beer count (default 1)")
     p.add_argument("--amount", type=float, default=None,
-                   help=f"money value (default: beers × {BEER_PRICE_EUR})")
+                   help=f"money value (default: beers x {BEER_PRICE_EUR})")
     p.add_argument("--currency", default=None,
                    help=f"currency (default {DEFAULT_CURRENCY})")
     p.add_argument("--at", default=None, metavar="YYYY-MM-DD",
@@ -104,6 +105,10 @@ def main():
 
     if args.beers < 1:
         p.error("--beers must be >= 1")
+    if not args.email.strip():
+        p.error("--email must not be empty")
+    if args.amount is not None and (not math.isfinite(args.amount) or args.amount <= 0):
+        p.error("--amount must be a finite number greater than zero")
     amount = args.amount if args.amount is not None else args.beers * BEER_PRICE_EUR
     currency = args.currency or DEFAULT_CURRENCY
 

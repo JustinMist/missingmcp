@@ -93,8 +93,10 @@ lands. It does **not** feed a website counter (there is none). Small CRUD helper
 - **Matched** → `matched=1`, `distinct_id` = the email (so the beer joins that person's funnel).
 - **Unmatched but email present** → `matched=0`, `distinct_id` = the email (a supporter-only
   person; PostHog stitches it if they later sign up with the same email).
-- **Anonymous** (no `--email`) → `matched=0`, `distinct_id` = synthetic `manual:anon:<beers.id>`
-  (no PII), still emitted so the event stream is complete.
+- **Anonymous** (no email) → `matched=0`, `distinct_id` = synthetic `manual:anon:<beers.id>`
+  (no PII), still emitted so the event stream is complete. **Not reachable from the manual CLI**,
+  which requires `--email`; this branch lives in `record_beer(email=None)` for the future BMC
+  writer (some BMC donations carry no email).
 - Interim note: in manual entry the operator types the login email, so matching is usually
   complete; the undercount mainly bites later with the automated BMC feed (donor's BMC email may
   differ from their login).
