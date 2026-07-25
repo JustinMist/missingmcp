@@ -39,7 +39,7 @@ There is no separate lint step configured.
 ## Hard constraints
 
 - **Never modify or import `garmin_mcp`.** Interact with it *only* as a black box via its documented CLI entrypoint (`garmin-mcp`) and env vars (`GARMIN_MCP_TRANSPORT`, `GARMIN_MCP_HOST`, `GARMIN_MCP_PORT`, `GARMINTOKENS`). No source edits, no importing its internal modules.
-- **Pin `GARMIN_MCP_REF`** to a reviewed commit SHA in production (the `main` default is a floating ref — supply-chain risk). After bumping the pin, run `python scripts/gen_garmin_tools.py` — it regenerates the "All tools" section of `templates/garmin.html` from the new ref.
+- **Pin `GARMIN_MCP_REF`** to a reviewed commit SHA in production (the `main` default is a floating ref — supply-chain risk). After bumping the pin, run `python scripts/gen_garmin_tools.py` — it regenerates the "All tools" section of `src/missingmcp/templates/garmin.html` from the new ref.
 - **Python 3.12** (matches the worker's interpreter). All source under `src/missingmcp/`, all tests under `tests/`.
 
 ## Architecture
