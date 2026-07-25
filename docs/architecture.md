@@ -6,19 +6,9 @@ one-line map and the cross-cutting invariants; this file carries the detail.
 Vocabulary (connector, adapter, forward strategy, worker, upstream) is defined
 in [`CONTEXT.md`](../CONTEXT.md).
 
-## Request flow
-
-One user, one device:
-
-```
-Claude → OAuth 2.1 (DCR → /<adapter>/oauth/register → /<adapter>/oauth/authorize → /<adapter>/oauth/token, PKCE S256, RFC 8414 discovery at /.well-known/oauth-authorization-server/<adapter>)
-       → adapter-specific login (garmin: garminconnect, password discarded, tokens kept; whoop: redirect to WHOOP's own OAuth, callback at /whoop/oauth/callback)
-       → encrypted blob in SQLite, keyed by (adapter, account_key)
-       → on POST /<adapter>/mcp, forward strategy (RFC 9728 discovery at /.well-known/oauth-protected-resource/<adapter>/mcp):
-           worker (garmin): ensure the user's worker subprocess (127.0.0.1:<port>) → reverse-proxy
-           remote (no in-tree adapter today): stream-forward to forward.upstream_url with forward.headers(blob) injected
-           local (whoop): forward.handle(conn, account_key, blob, body) runs the MCP server in-process — no subprocess, no upstream_url
-```
+The end-to-end request flow lives in
+[`CLAUDE.md` → Architecture](../CLAUDE.md#architecture) and is deliberately
+**not** repeated here — one copy, so the two can't drift.
 
 ## Modules
 
