@@ -85,6 +85,44 @@ def test_record_usage_counts(conn):
     assert total == 3
 
 
+def _seed_usage(conn, rows, when="2026-07-17 12:00:00"):
+    for adapter, key, tool in rows:
+        conn.execute(
+            "INSERT INTO tool_usage (adapter, account_key, tool, calls, last_used) "
+            "VALUES (?,?,?,1,?)", (adapter, key, tool, when))
+    conn.commit()
+
+
+DAY = ("2026-07-17 00:00:00", "2026-07-18 00:00:00")
+
+
+def test_active_accounts_excludes_protocol_traffic(conn):
+    """A client that only completed the handshake is connected, not active —
+    Claude re-runs initialize/tools-list on every connector refresh."""
+    _seed_usage(conn, [
+        ("garmin", "caller@x.cz", "get_activities"),            # real invocation
+        ("garmin", "lurker@x.cz", "initialize"),                # handshake only
+        ("garmin", "lurker@x.cz", "tools/list"),
+        ("garmin", "lurker@x.cz", "notifications/initialized"),
+        ("garmin", "lurker@x.cz", "prompts/list"),
+    ])
+    assert store.active_accounts_between(conn, *DAY) == {"garmin": 1}
+
+
+def test_active_accounts_counts_an_account_once_across_tools(conn):
+    _seed_usage(conn, [
+        ("garmin", "me@x.cz", "get_activities"),
+        ("garmin", "me@x.cz", "get_sleep_data"),
+        ("whoop",  "me@x.cz", "get_recoveries"),   # same person, other adapter
+    ])
+    assert store.active_accounts_between(conn, *DAY) == {"garmin": 1, "whoop": 1}
+
+
+def test_active_accounts_empty_when_only_protocol_traffic(conn):
+    _seed_usage(conn, [("garmin", "lurker@x.cz", m) for m in store.PROTOCOL_METHODS])
+    assert store.active_accounts_between(conn, *DAY) == {}
+
+
 def test_client_roundtrip(conn):
     store.create_client(conn, "c1", "secret_hash", ["https://a/cb", "https://b/cb"], "Claude", "garmin")
     c = store.get_client(conn, "c1")

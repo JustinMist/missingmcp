@@ -52,6 +52,21 @@ def test_build_report_counts_and_tz_boundary():
     assert r["totals"] == {"new": 1, "active": 2, "total": 4, "new_week": 2}
 
 
+def test_active_ignores_clients_that_only_handshook():
+    """Regression: the report counted protocol traffic as activity, so a merely
+    connected client inflated "active" (2026-07-25: 83 reported vs 48 real)."""
+    conn = store.init_db(":memory:")
+    _seed(conn)
+    for tool in ("initialize", "tools/list", "notifications/initialized"):
+        conn.execute(
+            "INSERT INTO tool_usage (adapter, account_key, tool, calls, last_used) "
+            "VALUES (?,?,?,?,?)", ("garmin", "lurker@x", tool, 1, "2026-07-17 12:00:00"))
+    conn.commit()
+    r = report.build_report(conn, NOW)
+    assert r["adapters"]["garmin"]["active"] == 2   # unchanged by the lurker
+    assert r["totals"]["active"] == 2
+
+
 def test_render_slack_has_date_and_totals():
     conn = store.init_db(":memory:")
     _seed(conn)

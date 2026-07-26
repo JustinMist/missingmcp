@@ -50,6 +50,13 @@ where `account_key` is their lowercased login email. Holds the encrypted
 credential blob.
 _Avoid_: user, customer, login (those blur account vs. device vs. person).
 
+**Active account**:
+An account that invoked a tool inside a given window. The handshake and
+discovery calls an MCP client makes on its own (`initialize`, `tools/list`, …)
+are **protocol traffic**, not activity — an account doing only those is
+connected, not active (ADR-0002).
+_Avoid_: active user (blurs account vs. person), usage, engaged
+
 **Device**:
 One issued access token — a single Claude client (mobile/desktop/web) connected
 to an account. Revoking a device logs it out without touching the account.
