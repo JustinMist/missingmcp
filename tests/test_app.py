@@ -1,4 +1,5 @@
 import json
+import re
 from starlette.testclient import TestClient
 from missingmcp import store
 from missingmcp.app import build_app, _run_data_cleanup
@@ -139,7 +140,7 @@ def test_garmin_page(tmp_path):
 def test_static_logo_assets_served(tmp_path):
     c = _client(tmp_path)
     for path in ("/static/icon.png", "/static/favicon-32.png",
-                 "/static/apple-touch-icon.png"):
+                 "/static/apple-touch-icon.png", "/static/og.png"):
         r = c.get(path)
         assert r.status_code == 200, path
         assert r.headers["content-type"] == "image/png", path
@@ -224,6 +225,41 @@ def test_seo_head_meta(tmp_path):
     assert "<title>Garmin MCP Server — Connect Garmin to Claude | MissingMCP" in garmin
     assert 'property="og:title"' in garmin
     assert '"@type": "SoftwareApplication"' in garmin      # JSON-LD data block
+
+
+def test_link_preview_card_meta(tmp_path):
+    # A 256x256 icon as og:image made every shared link letterbox, and `summary`
+    # rendered it as a thumbnail. The card is 1200x630 (1.91:1) and must be
+    # declared with its dimensions, so a scraper lays it out on first parse.
+    home = _client(tmp_path).get("/").text
+    assert 'property="og:image" content="https://gw.example.com/static/og.png?v=' in home
+    assert '<meta property="og:image:width" content="1200">' in home
+    assert '<meta property="og:image:height" content="630">' in home
+    assert 'property="og:image:alt"' in home
+    assert '<meta name="twitter:card" content="summary_large_image">' in home
+    assert "/static/icon.png?" not in home                 # icon is no longer the card
+
+
+def test_preview_description_is_short_while_search_description_stays_long(tmp_path):
+    # Two different jobs: previews cut at ~125 chars, search descriptions run to
+    # ~155. The long one must survive for SEO, the preview one must fit.
+    home = _client(tmp_path).get("/").text
+    seo = re.search(r'<meta name="description" content="([^"]+)"', home).group(1)
+    og = re.search(r'<meta property="og:description" content="([^"]+)"', home).group(1)
+    assert len(seo) > 150                                  # unchanged, still full
+    assert len(og) <= 120 and og != seo
+    assert not og.endswith("…")                            # cut on a real boundary
+
+
+def test_og_desc_falls_back_to_first_sentence():
+    from missingmcp import pages
+    long = ("Hosted Garmin MCP server: connect your Garmin account to Claude in "
+            "two minutes. Sign in once, add a URL, start asking. Free and open "
+            "source.")
+    assert pages.og_desc(long) == ("Hosted Garmin MCP server: connect your Garmin "
+                                   "account to Claude in two minutes")
+    assert pages.og_desc("short one") == "short one"       # already fits, untouched
+    assert pages.og_desc("x" * 200).endswith("…")          # no boundary to find
 
 
 def test_home_features_garmin_first(tmp_path):

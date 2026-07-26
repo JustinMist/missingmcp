@@ -66,13 +66,14 @@ def build_app(config: Config) -> Starlette:
     dr = report.DailyReport(config)
 
     def _render(name: str, title: str, desc: str | None = None,
-                path: str = "/", extra_head: str = "") -> str:
+                path: str = "/", extra_head: str = "",
+                social_desc: str | None = None) -> str:
         ph = telemetry.web_head(config)
         if ph:
             extra_head = f"{extra_head}\n{ph}" if extra_head else ph
         return pages.render_page(
             name, title, desc, public_url=config.public_url, path=path,
-            extra_head=extra_head,
+            extra_head=extra_head, social_desc=social_desc,
         ).replace(
             "{PUBLIC_URL}", config.public_url
         ).replace("{OPERATOR}", pages.operator_html(config)).replace(
@@ -90,6 +91,10 @@ def build_app(config: Config) -> Starlette:
         "Give Claude your Garmin and health data, then just ask — did I eat "
         "enough for today's ride, how did I sleep this week? A hosted Garmin "
         "MCP server: connect in two minutes. Free and open source.",
+        # The search description keeps both example questions; the preview line
+        # gets one, because previews cut at ~125 characters.
+        social_desc="Give Claude your Garmin and WHOOP data, then just ask — "
+                    "how did I sleep this week?",
         extra_head=_json_ld({"@type": "WebSite", "name": "MissingMCP",
                              "url": config.public_url}))
 
@@ -156,7 +161,8 @@ def build_app(config: Config) -> Starlette:
     # from memory — same-origin, so CSP `default-src 'self'` covers them
     # without an img-src rule.
     _assets = {n: (_STATIC / n).read_bytes()
-               for n in ("icon.png", "favicon-32.png", "apple-touch-icon.png")}
+               for n in ("icon.png", "favicon-32.png", "apple-touch-icon.png",
+                         "og.png")}
     site_js = (_STATIC / "site.js").read_text()
 
     async def healthz(request):
@@ -387,6 +393,9 @@ def build_app(config: Config) -> Starlette:
               _text(telemetry.web_bootstrap_js(config) if telemetry.enabled() else "",
                     "application/javascript"), methods=["GET"]),
         Route("/static/icon.png", static_png("icon.png"), methods=["GET"]),
+        # The link-preview card. Linked with a ?v= content hash, so scrapers that
+        # cache og:image per URL pick up a regenerated card.
+        Route("/static/og.png", static_png("og.png"), methods=["GET"]),
         Route("/static/favicon-32.png", static_png("favicon-32.png"), methods=["GET"]),
         Route("/static/apple-touch-icon.png", static_png("apple-touch-icon.png"), methods=["GET"]),
     ]
