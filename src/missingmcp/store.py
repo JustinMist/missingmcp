@@ -245,12 +245,43 @@ def new_accounts_between(conn, start_utc: str, end_utc: str) -> dict:
     return {r[0]: r[1] for r in rows}
 
 
+# JSON-RPC methods an MCP client sends on its own — handshake and discovery, not
+# a user asking for anything. `record_usage` stores them under `tool` like any
+# real call (proxy._mcp_tool returns the bare method for everything that isn't
+# `tools/call`), so any *activity* metric has to exclude them. Counting them
+# reports a merely-connected client as an active user: on 2026-07-25 that was 83
+# "active" accounts against 48 that actually invoked a tool, because Claude
+# re-runs the handshake on every connector refresh.
+PROTOCOL_METHODS = frozenset({
+    "initialize",
+    "notifications/initialized",
+    "notifications/cancelled",
+    "ping",
+    "tools/list",
+    "tools/call",            # only reached when the call carried no tool name
+    "resources/list",
+    "resources/templates/list",
+    "resources/subscribe",
+    "resources/unsubscribe",
+    "prompts/list",
+    "logging/setLevel",
+    "completion/complete",
+})
+
+
 def active_accounts_between(conn, start_utc: str, end_utc: str) -> dict:
-    """Distinct accounts that made a tool call in [start_utc, end_utc), by adapter."""
+    """Distinct accounts that invoked a tool in [start_utc, end_utc), by adapter.
+
+    Protocol traffic (`PROTOCOL_METHODS`) is excluded — see that constant for why.
+    Note this still reads `tool_usage.last_used`, which `record_usage` overwrites
+    per (adapter, account_key, tool): an account that called the same tool again
+    later falls out of the earlier window, so the count remains a lower bound."""
+    placeholders = ",".join("?" * len(PROTOCOL_METHODS))
     rows = conn.execute(
         "SELECT adapter, COUNT(DISTINCT account_key) FROM tool_usage "
-        "WHERE last_used >= ? AND last_used < ? GROUP BY adapter",
-        (start_utc, end_utc),
+        "WHERE last_used >= ? AND last_used < ? "
+        f"AND tool NOT IN ({placeholders}) GROUP BY adapter",
+        (start_utc, end_utc, *sorted(PROTOCOL_METHODS)),
     ).fetchall()
     return {r[0]: r[1] for r in rows}
 
