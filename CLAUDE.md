@@ -29,6 +29,12 @@ GATEWAY_SECRET="$(openssl rand -base64 48)" PUBLIC_URL=http://localhost:8088 POR
 # page's tool listing:
 python scripts/gen_whoop_tools.py
 
+# After changing the link-preview card's copy or palette, redraw static/og.png
+# (Pillow is not a project dependency, hence --with). The `?v=` cache-buster in
+# pages.py is derived from the file's hash, so a redraw invalidates scraper caches
+# by itself:
+uv run --with pillow python scripts/gen_og_image.py
+
 # Production (missingmcp.com) runs on Railway, built from the Dockerfile, and
 # auto-deploys on every push to main — pushing = deploying. Verify after push:
 # railway deployment list --json. (Self-host: plain `docker run` — see README.)
