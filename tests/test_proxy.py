@@ -92,6 +92,35 @@ def test_worker_start_failure_maps_to_reauth_401(tmp_path, fake_worker):
     assert 'resource_metadata="https://x/.well-known/oauth-protected-resource/garmin/mcp"' in wa
 
 
+def test_stale_credentials_worker_exit_maps_to_reauth_401(tmp_path, fake_worker):
+    # The common case in production: the worker starts, rejects the stored tokens
+    # and exits cleanly. It is logged apart from real worker faults
+    # (`worker-forward-auth-stale` vs `worker-start-failed`) so the ops alert only
+    # fires on the latter — but what the client sees must stay identical to any
+    # other expired-session path: 401 + the RFC 9728 challenge.
+    conn = store.init_db(":memory:")
+    cfg = _cfg(tmp_path, fake_worker)
+    token = "tok-stale"
+    store.upsert_account(conn, "garmin", "me@x.cz", '{"t":1}', cfg.gateway_secret)
+    store.create_access_token(conn, store.hash_token(token), "garmin", "me@x.cz", "c1")
+
+    class SelfExitedProc:
+        def poll(self): return 0
+        def terminate(self): pass
+
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: SelfExitedProc())
+    c = _app(conn, mgr, cfg)
+    r = c.post("/mcp", json={"jsonrpc": "2.0", "method": "initialize"},
+               headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 401
+    assert r.json() == {
+        "error": "invalid_token",
+        "message": "Your Garmin session expired. Please reconnect the Garmin MCP server.",
+    }
+    assert 'resource_metadata="https://x/.well-known/oauth-protected-resource/garmin/mcp"' \
+        in r.headers["www-authenticate"]
+
+
 def test_unknown_account_maps_to_reauth_401(tmp_path, fake_worker):
     # Valid Bearer, but the account blob is gone (e.g. off-boarded upstream). Same
     # self-heal path: 401 + challenge so the client re-authorizes.

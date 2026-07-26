@@ -162,8 +162,19 @@ strategy dispatch via `is_remote` / `is_local`:
 - **local** — 405s on GET/DELETE (stateless, no sessions) and calls
   `forward.handle(conn, account_key, blob, body)` in-process, mapping
   `SessionExpired` to a re-auth 401 (event `local-forward-auth-stale`)
-- **worker** — calls `ensure_worker` (start-failure → re-auth 401, event
-  `worker-start-failed`)
+- **worker** — calls `ensure_worker`; every failure becomes a re-auth 401, but
+  they are logged apart, because only one of them is routine. A worker that exits
+  **cleanly (rc 0)** during startup has rejected the account's stored credentials
+  — for `garmin_mcp`, "OAuth tokens not found … Exiting." on stale tokens
+  (`WorkerCredentialsRejected` → events `worker-exited-early` +
+  `worker-forward-auth-stale`, info; the user re-signs-in and no operator is
+  needed). Everything else is a genuine fault that keeps `worker-start-failed` at
+  error level: a spawn failure, an exhausted port range, a worker that stayed
+  alive and never answered `/healthz` (`worker-unhealthy`), and — importantly — a
+  worker that died **non-zero or on a signal** (`worker-died`, e.g. rc 1 on a
+  traceback or 137 on an OOM kill), which must never be mistaken for stale
+  credentials or a crash-loop would go silent. The ops alert and
+  `hourly_digest.py`'s `SELF_HEAL_EVENTS` both key off that split
 - **remote** — injects `forward.headers(blob)` and maps upstream 401/403 to the
   same re-auth 401 (event `remote-forward-auth-stale`)
 
