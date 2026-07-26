@@ -46,12 +46,15 @@ class WorkerStartError(Exception):
 
 
 class WorkerCredentialsRejected(WorkerStartError):
-    """The worker came up, decided it can't serve this account, and exited on
-    its own during startup — for `garmin_mcp` that's "OAuth tokens not found
-    ... Exiting." (rc 0) once the stored tokens go stale. Expected and
+    """The worker came up, decided it can't serve this account, and exited
+    *cleanly* (rc 0) during startup — for `garmin_mcp` that's "OAuth tokens not
+    found ... Exiting." once the stored tokens go stale. Expected and
     self-healing: the account needs a fresh sign-in, not an operator. Kept a
     subclass of WorkerStartError so any `except WorkerStartError` still catches
-    it and the caller's re-auth handling stays a single path."""
+    it and the caller's re-auth handling stays a single path.
+
+    A non-zero or signalled exit is deliberately NOT this — that's a crash, and
+    it stays a plain WorkerStartError so it keeps reaching the ops alert."""
 
 
 @dataclass
@@ -126,12 +129,22 @@ class WorkerManager:
                     # Two very different failures used to share one event (and one
                     # error-level alert): a worker that quit by itself because the
                     # account's credentials are stale — routine, the user fixes it
-                    # by signing in again — and a worker that hung. Keep them apart
+                    # by signing in again — and a worker that broke. Keep them apart
                     # so the noisy one can't drown out the one worth waking up for.
-                    if outcome == "exited":
+                    #
+                    # Only a CLEAN exit is the routine one: garmin_mcp prints
+                    # "OAuth tokens not found ... Exiting." and returns 0. A non-zero
+                    # or signalled exit (crash, rc=137 OOM kill, segfault) is a real
+                    # fault and must stay loud — filing it as stale credentials would
+                    # hide exactly the outage this split exists to surface.
+                    if outcome == "exited" and rc == 0:
                         log("worker-exited-early", port=port, returncode=rc, account=key)
                         raise WorkerCredentialsRejected(
                             f"worker for {key[:3]}*** exited during startup (rc={rc})")
+                    if outcome == "exited":
+                        log("worker-died", port=port, returncode=rc, account=key)
+                        raise WorkerStartError(
+                            f"worker for {key[:3]}*** died during startup (rc={rc})")
                     log("worker-unhealthy", port=port, returncode=rc,
                         startup_timeout=self._cfg.worker_startup_timeout)
                     raise WorkerStartError(f"worker for {key[:3]}*** failed to become healthy")

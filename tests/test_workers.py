@@ -65,6 +65,24 @@ async def test_self_exit_during_startup_is_credentials_rejected(tmp_path):
     assert time.monotonic() - t0 < 5              # gave up on exit, didn't sit out the 30s
 
 
+@pytest.mark.parametrize("rc", [1, 137, -11])
+async def test_crashed_worker_is_not_filed_as_stale_credentials(tmp_path, rc):
+    # A worker that dies non-zero has crashed — rc 1 on a traceback, 137 on an OOM
+    # kill, negative on a signal. Filing those as stale credentials would silence
+    # the ops alert on a real outage (e.g. a bad GARMIN_MCP_REF bump crashing every
+    # worker), which is the opposite of what the event split is for.
+    class CrashedProc:
+        def poll(self): return rc
+        def terminate(self): pass
+
+    cfg = _config(tmp_path, worker_startup_timeout=30, worker_port_start=59993, worker_port_end=59993)
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: CrashedProc())
+    with pytest.raises(workers.WorkerStartError) as exc:
+        await mgr.ensure_worker("me@x.cz", "{}")
+    assert not isinstance(exc.value, workers.WorkerCredentialsRejected)
+    assert str(rc) in str(exc.value)              # the code is in the message, for triage
+
+
 async def test_hanging_worker_is_a_plain_start_error(tmp_path):
     # Alive but silent on /healthz is the other failure: something is genuinely
     # wrong with the worker, and it must NOT be filed as stale credentials.
