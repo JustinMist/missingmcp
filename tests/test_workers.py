@@ -48,6 +48,37 @@ async def test_ensure_raises_when_never_healthy(tmp_path):
         await mgr.ensure_worker("me@x.cz", "{}")
 
 
+async def test_self_exit_during_startup_is_credentials_rejected(tmp_path):
+    # A worker that quits by itself has judged the account unserviceable — for
+    # garmin_mcp, stale tokens ("OAuth tokens not found ... Exiting.", rc 0). That's
+    # the user's re-sign-in, not an operator's incident, so it must be its own
+    # exception type and must not wait out the whole startup timeout.
+    class SelfExitedProc:
+        def poll(self): return 0                  # clean exit, exactly what garmin_mcp does
+        def terminate(self): pass
+
+    cfg = _config(tmp_path, worker_startup_timeout=30, worker_port_start=59995, worker_port_end=59995)
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: SelfExitedProc())
+    t0 = time.monotonic()
+    with pytest.raises(workers.WorkerCredentialsRejected):
+        await mgr.ensure_worker("me@x.cz", "{}")
+    assert time.monotonic() - t0 < 5              # gave up on exit, didn't sit out the 30s
+
+
+async def test_hanging_worker_is_a_plain_start_error(tmp_path):
+    # Alive but silent on /healthz is the other failure: something is genuinely
+    # wrong with the worker, and it must NOT be filed as stale credentials.
+    class AliveProc:
+        def poll(self): return None               # still running, never answers
+        def terminate(self): pass
+
+    cfg = _config(tmp_path, worker_startup_timeout=1, worker_port_start=59994, worker_port_end=59994)
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: AliveProc())
+    with pytest.raises(workers.WorkerStartError) as exc:
+        await mgr.ensure_worker("me@x.cz", "{}")
+    assert not isinstance(exc.value, workers.WorkerCredentialsRejected)
+
+
 async def test_reap_idle_terminates(tmp_path, fake_worker):
     clock = [1000.0]
 

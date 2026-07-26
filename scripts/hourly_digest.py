@@ -15,9 +15,9 @@ Verdict (decided in .scratch/slack-hourly-digest ticket 03):
                HEARTBEAT_HOUR each day (GitHub cron is best-effort — a later run
                catches up when the scheduled hour was skipped; see heartbeat_due).
   * otherwise: silent.
-Re-auth signals (worker-start-failed / *-forward-auth-stale) are the expected
-self-heal path and are NOT counted as anomalies; worker-log traceback
-continuation lines are folded into their preceding ERROR row.
+Re-auth signals (*-forward-auth-stale) are the expected self-heal path and are
+NOT counted as anomalies; worker-log traceback continuation lines are folded into
+their preceding ERROR row.
 
 Env:
   RAILWAY_API_TOKEN       account/workspace token (Bearer)         [required]
@@ -47,8 +47,12 @@ import httpx
 
 RAILWAY_API = "https://backboard.railway.com/graphql/v2"
 GITHUB_API = "https://api.github.com"
-# Re-auth self-heal events: logged at error level but NOT anomalies (ticket 03).
-SELF_HEAL_EVENTS = {"worker-start-failed", "local-forward-auth-stale",
+# Re-auth self-heal events: the account's stored credentials went stale, the user
+# fixes it by signing in again. Counted as `reauth`, never as anomalies (ticket 03).
+# `worker-start-failed` is deliberately NOT here: since the worker strategy split
+# its stale-credentials case out into `worker-forward-auth-stale`, what's left under
+# that name is a worker that hung or failed to spawn — a real fault worth escalating.
+SELF_HEAL_EVENTS = {"worker-forward-auth-stale", "local-forward-auth-stale",
                     "remote-forward-auth-stale"}
 # workers.py elevates every worker stdout line matching ERROR|CRITICAL|Traceback|
 # Exception — so one failed worker API call arrives as SEVERAL error rows (the

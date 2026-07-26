@@ -5,7 +5,7 @@ import httpx
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from . import store, security, telemetry
 from .adapters.base import is_remote, is_local, SessionExpired
-from .workers import WorkerStartError
+from .workers import WorkerStartError, WorkerCredentialsRejected
 from .log import log, log_error, log_exc
 
 # Upstream forward timeout for both strategies (parity with the TS proxy's 30s).
@@ -182,6 +182,13 @@ async def handle_mcp(request, method, adapter, conn, manager, config, secret, ra
             port = await manager.ensure_worker(key, tokens)
             log("worker-ensure-ok", port=port, account=key,
                 ms=int((time.monotonic() - t0) * 1000))
+        except WorkerCredentialsRejected as e:
+            # The stored tokens went stale — same self-heal path as the local and
+            # remote strategies (`*-forward-auth-stale`), so it's logged like them:
+            # no traceback, and not an error the operator has to chase.
+            log("worker-forward-auth-stale", adapter=adapter.name, account=key,
+                error=str(e))
+            return _reauth_required(config, adapter)
         except WorkerStartError as e:
             log_exc("worker-start-failed", e, error=str(e), account=key)
             return _reauth_required(config, adapter)

@@ -162,8 +162,15 @@ strategy dispatch via `is_remote` / `is_local`:
 - **local** — 405s on GET/DELETE (stateless, no sessions) and calls
   `forward.handle(conn, account_key, blob, body)` in-process, mapping
   `SessionExpired` to a re-auth 401 (event `local-forward-auth-stale`)
-- **worker** — calls `ensure_worker` (start-failure → re-auth 401, event
-  `worker-start-failed`)
+- **worker** — calls `ensure_worker`; both of its failures become a re-auth 401,
+  but they are logged apart, because only one of them is worth an operator's
+  attention: a worker that exited by itself during startup means the account's
+  stored credentials are stale (`WorkerCredentialsRejected` → event
+  `worker-forward-auth-stale`, info — routine, the user re-signs-in), while a
+  spawn failure, an exhausted port range or a worker that stayed alive and never
+  answered `/healthz` is a genuine fault (`WorkerStartError` → event
+  `worker-start-failed`, error). The ops alert and `hourly_digest.py`'s
+  `SELF_HEAL_EVENTS` both key off that split
 - **remote** — injects `forward.headers(blob)` and maps upstream 401/403 to the
   same re-auth 401 (event `remote-forward-auth-stale`)
 

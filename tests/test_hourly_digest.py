@@ -46,7 +46,7 @@ def test_parse_row_decodes_json_encoded_attribute_values():
 def test_parse_row_self_heal_event_decoded_is_excluded():
     # A JSON-encoded self-heal event must still be recognized after decoding.
     rows = [{"timestamp": "t", "severity": "error", "message": "",
-             "attributes": [{"key": "event", "value": '"worker-start-failed"'}]}]
+             "attributes": [{"key": "event", "value": '"local-forward-auth-stale"'}]}]
     assert hd.summarize(rows)["err_rows"] == 0 and hd.summarize(rows)["reauth"] == 1
 
 
@@ -159,7 +159,7 @@ def _mixed():
         _entry(event="mcp-request"), _entry(event="mcp-request"),
         _entry(event="mcp-response", status=200, account="a@x"),
         _entry(event="mcp-response", status=502, account="a@x"),   # a 5xx
-        _entry(level="error", event="worker-start-failed", account="b@x"),  # self-heal, not anomaly
+        _entry(level="error", event="local-forward-auth-stale", account="b@x"),  # self-heal, not anomaly
         _entry(level="error", event="local-forward-error", account="b@x"),  # real error
     ]
 
@@ -168,8 +168,8 @@ def test_summarize_counts_and_excludes_self_heal():
     s = hd.summarize(_mixed())
     assert s["requests"] == 2
     assert s["http_5xx"] == 1
-    assert s["err_rows"] == 1          # local-forward-error only; worker-start-failed excluded
-    assert s["reauth"] == 1            # worker-start-failed
+    assert s["err_rows"] == 1          # local-forward-error only; the auth-stale row excluded
+    assert s["reauth"] == 1            # local-forward-auth-stale
     assert s["critical"] == 0
     assert s["problems"] == 2          # 5xx + err_rows
     assert s["accounts"] == 2
@@ -207,10 +207,26 @@ def test_verdict_probe_failure_is_loud_even_when_clean():
 
 
 def test_verdict_self_heal_alone_is_not_an_anomaly():
-    rows = [_entry(level="error", event="worker-start-failed", account=f"{i}@x")
+    rows = [_entry(level="error", event="local-forward-auth-stale", account=f"{i}@x")
             for i in range(5)]
     v = hd.verdict(hd.summarize(rows), probe_ok=True, is_heartbeat=False, anomaly_min=3)
     assert not v["loud"] and not v["minor"] and not v["should_post"]
+
+
+def test_stale_worker_credentials_are_self_heal_but_worker_faults_are_not():
+    # The whole point of splitting the worker event: a stale-credentials row is a
+    # re-auth signal that stays quiet, while `worker-start-failed` now means the
+    # worker itself broke and must escalate like any other error.
+    stale = [_entry(event="worker-forward-auth-stale", account=f"{i}@x") for i in range(5)]
+    s = hd.summarize(stale)
+    assert s["reauth"] == 5 and s["err_rows"] == 0 and s["problems"] == 0
+    assert not hd.verdict(s, probe_ok=True, is_heartbeat=False, anomaly_min=3)["should_post"]
+
+    faults = [_entry(level="error", event="worker-start-failed", account=f"{i}@x")
+              for i in range(3)]
+    s = hd.summarize(faults)
+    assert s["reauth"] == 0 and s["err_rows"] == 3
+    assert hd.verdict(s, probe_ok=True, is_heartbeat=False, anomaly_min=3)["loud"]
 
 
 def _prague(day, hour, minute=0):
