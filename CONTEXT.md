@@ -6,6 +6,42 @@ conversation.
 
 ## Language
 
+### Connectors & adapters
+
+**Connector**:
+What a person adds in their MCP client — one URL, one sign-in, one entry in
+Claude's Settings → Connectors. Every connector is served by exactly one adapter.
+_Avoid_: adapter (that's the gateway's view), plugin, integration
+
+**Adapter**:
+The gateway-side implementation of one connector — its login shape, its
+credential blob, its forward strategy. Named in `(adapter, account_key)` and in
+the URL `/<adapter>/mcp`.
+_Avoid_: connector (that's the person's view), provider, integration
+
+**Upstream**:
+The third-party service an adapter connects to (Garmin, WHOOP) — the system that
+owns the data and authenticates the account. Never the gateway itself.
+_Avoid_: provider, backend, vendor
+
+**Forward strategy**:
+How an adapter serves `/<adapter>/mcp` — **worker** (proxied to a per-account
+subprocess), **remote** (forwarded to a hosted upstream MCP), or **local** (served
+inside the gateway process).
+_Avoid_: transport, mode, backend
+
+**Worker**:
+A per-account subprocess running an unmodified upstream MCP server, reachable
+only by the gateway. Only the worker strategy has them.
+_Avoid_: instance, child process, server
+
+**Retired adapter**:
+An adapter deliberately taken out of service and named on the explicit
+`RETIRED_ADAPTERS` list — e.g. `rohlik`, retired 2026-07-06. Its rows are purged
+from every table. **Not** the same as "absent from the registry": absence is
+config-dependent, and treating it as retirement deletes live data (ADR-0001).
+_Avoid_: dead adapter, dropped adapter, disabled adapter
+
 ### OAuth & connection lifecycle
 
 **Account**:
@@ -29,11 +65,6 @@ An OAuth client with zero access tokens — a registration whose OAuth flow neve
 completed (user abandoned it, or Claude retried). The one thing that accumulates
 without bound. This is what "unconfigured client" means.
 _Avoid_: unconfigured, dangling.
-
-**Dead-adapter row**:
-Any row keyed to an `adapter` no longer present in the registry
-(`adapters.build_adapters`) — e.g. `rohlik`, retired 2026-07-06. Can never become
-live again.
 
 **Stale token / device** (defined, out of current cleanup scope):
 An access token whose `last_used` is older than a chosen threshold. This is what
