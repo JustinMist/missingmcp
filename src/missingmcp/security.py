@@ -10,6 +10,10 @@ from typing import Callable
 
 _SESSION_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# The shape of a client_id this server issues: new_secret(16) is
+# secrets.token_urlsafe(16) -> 22 chars of [A-Za-z0-9_-]. Ranged, not fixed at 22,
+# so a future nbytes change doesn't silently reclassify every real registration.
+_CLIENT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 
 
 def security_headers(script_hosts: tuple[str, ...] = (),
@@ -57,6 +61,18 @@ def new_secret(nbytes: int = 32) -> str:
 
 def validate_session_id(sid: str) -> bool:
     return bool(_SESSION_RE.match(sid))
+
+
+def looks_like_issued_client_id(client_id: str) -> bool:
+    """True when `client_id` could be one this server issued — i.e. the shape of
+    `new_secret(16)` (`secrets.token_urlsafe`, 22 chars of [A-Za-z0-9_-]).
+
+    Not a security check: an unknown client is rejected either way. It only tells
+    the two reasons apart, because they need opposite advice. A value carrying an
+    `@` or a `.` cannot have come from us, and in practice is the user's own email
+    typed into the client's optional "OAuth Client ID" field — for which
+    re-adding the connector is useless advice."""
+    return bool(_CLIENT_ID_RE.match(client_id))
 
 
 def valid_email(email: str) -> bool:
