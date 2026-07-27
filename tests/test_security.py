@@ -108,3 +108,14 @@ def test_valid_email():
     assert not security.valid_email("no@domain")          # no TLD dot
     assert not security.valid_email("spaces in@email.com")
     assert not security.valid_email("a@" + "x" * 300 + ".com")   # too long
+
+
+def test_looks_like_issued_client_id_separates_dcr_from_typed_values():
+    # The discriminator behind the two different authorize error pages. Values we
+    # issue are secrets.token_urlsafe(16); anything a human types into an "OAuth
+    # Client ID" field carries characters that alphabet has no room for.
+    assert security.looks_like_issued_client_id(security.new_secret(16))
+    assert security.looks_like_issued_client_id("fIywIaqb21PY3SlEPDyg9A")
+    for typed in ("ilya@example.com", "thomas.dupont", "nick.snow@x.co",
+                  "", "nope", "my client", "id/with/slashes"):
+        assert not security.looks_like_issued_client_id(typed), typed

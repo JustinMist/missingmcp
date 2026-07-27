@@ -182,6 +182,30 @@ async def authorize_get(request, adapter, state, conn, config) -> HTMLResponse |
     params = _oauth_params_from(request.query_params)
     client = store.get_client(conn, params["client_id"])
     if client is None:
+        # Two different reasons land here, and the advice for one is useless for
+        # the other, so tell them apart by the shape of the value.
+        if not security.looks_like_issued_client_id(params["client_id"]):
+            # It cannot be a registration of ours. What it is, in practice, is
+            # something the user typed into the client's optional "OAuth Client
+            # ID" field — usually their own email — which makes the client skip
+            # dynamic registration entirely and send that instead. Telling this
+            # user to re-add the connector sends them round the same loop, which
+            # is what they report back.
+            log_error("authorize-client-id-not-dcr",
+                      client_id=params["client_id"][:8])
+            return HTMLResponse(
+                "<h1>Leave the OAuth fields empty</h1>"
+                "<p>Your client sent an <strong>OAuth Client ID</strong> that "
+                "this server never issued, so there is nothing to sign in "
+                "with. That happens when the connector was added with the "
+                "optional <em>OAuth Client ID</em> / <em>OAuth Client Secret</em> "
+                "fields filled in &mdash; they are not your account details, and "
+                "this server hands them out automatically.</p>"
+                "<p>To fix it: <strong>remove the connector</strong>, add it "
+                "again with <strong>only the URL</strong>, and leave both OAuth "
+                "fields blank. You sign in with your account on the next "
+                "screen.</p>",
+                status_code=400)
         # Claude/ChatGPT cache their DCR registration per org — when it's gone
         # (orphan sweep, DB reset), every retry dead-ends here until the user
         # re-adds the connector (which re-registers). Say so, and log it:
@@ -192,7 +216,10 @@ async def authorize_get(request, adapter, state, conn, config) -> HTMLResponse |
             "<p>Your AI client is using a registration this server no longer "
             "knows. To fix it: <strong>remove the connector</strong> in your "
             "client (Claude: Settings &rarr; Connectors &rarr; Remove), then "
-            "<strong>add it again</strong> and sign in.</p>",
+            "<strong>add it again</strong> and sign in. Add it with "
+            "<strong>only the URL</strong> &mdash; if you fill in the optional "
+            "<em>OAuth Client ID</em> / <em>Client Secret</em> fields, you will "
+            "land back here.</p>",
             status_code=400)
     if not security.validate_redirect_uri(params["redirect_uri"], client["redirect_uris"]):
         return HTMLResponse("invalid redirect_uri", status_code=400)

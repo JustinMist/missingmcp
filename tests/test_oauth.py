@@ -173,16 +173,40 @@ def test_login_mfa_then_verify_redirects(conn):
     assert store.get_account_tokens(conn, "garmin", "me@x.cz", CONFIG.gateway_secret) == '{"t":9}'
 
 
-def test_authorize_get_unknown_client_explains_recovery(conn):
+def test_authorize_get_unknown_client_explains_recovery(conn, capsys):
     # Claude/ChatGPT cache their DCR registration — when it's gone (orphan
     # sweep), the user is stuck until they re-add the connector. Tell them.
+    # The client_id must have the shape we issue (token_urlsafe(16)), otherwise
+    # this is the other failure below.
     client, _ = _authz_app(conn)
-    r = client.get("/oauth/authorize?response_type=code&client_id=nope"
+    r = client.get("/oauth/authorize?response_type=code&client_id=fIywIaqb21PY3SlEPDyg9A"
                    "&redirect_uri=https://claude.ai/cb&code_challenge=abc"
                    "&code_challenge_method=S256&state=x")
     assert r.status_code == 400
+    assert "registration expired" in r.text.lower()
     assert "remove the connector" in r.text.lower()
     assert "add it again" in r.text.lower()
+    assert "authorize-unknown-client" in capsys.readouterr().out
+
+
+def test_authorize_get_user_supplied_client_id_says_leave_oauth_fields_empty(conn, capsys):
+    # Observed in production on 6 accounts in one week: the connector is added
+    # with the client's optional "OAuth Client ID" field filled in — usually the
+    # user's own email — so the client skips DCR and sends that. "Re-add the
+    # connector" is useless advice here; they re-add it and fill the field again.
+    # A value carrying @ or . cannot be one we issued, so say what to do instead.
+    client, _ = _authz_app(conn)
+    r = client.get("/oauth/authorize?response_type=code&client_id=ilya@example.com"
+                   "&redirect_uri=https://claude.ai/cb&code_challenge=abc"
+                   "&code_challenge_method=S256&state=x")
+    assert r.status_code == 400
+    body = r.text.lower()
+    assert "leave the oauth fields empty" in body
+    assert "only the url" in body
+    assert "registration expired" not in body        # the misleading advice is gone
+    out = capsys.readouterr().out
+    assert "authorize-client-id-not-dcr" in out      # counted apart from stale DCR
+    assert "ilya@example.com" not in r.text          # never reflect it into the page
 
 
 def test_authorize_post_bad_csrf_rerenders_form(conn):
