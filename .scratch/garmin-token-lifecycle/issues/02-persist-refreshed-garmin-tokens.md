@@ -1,7 +1,14 @@
 # 02 — Garmin token materialization is one-way; refreshed tokens are discarded
 
 Type: research
-Status: needs-triage
+Status: ready-for-agent
+
+Triaged 2026-07-27. Promoted ahead of ticket 01: 01's seven-day numbers show the
+re-auth 401 reaches almost nobody in time (3 of 58 accounts recover within 15
+minutes, median ~35 hours), so preventing an expiry is worth more than explaining
+it. The check below is cheap and decides whether prevention is even possible —
+run it before committing to 01's mail channel. Needs production access
+(`railway ssh --service gateway`, working as of 2026-07-27).
 
 ## Context
 
