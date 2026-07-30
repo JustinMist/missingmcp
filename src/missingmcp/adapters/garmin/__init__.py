@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import os
 from typing import Mapping
 from ..base import (LoginError, LoginOk, SecondFactorError, SecondFactorNeeded,
@@ -29,6 +30,19 @@ class GarminWorkerForward:
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:
             f.write(blob)
+
+    def read_back(self, workdir: str) -> str | None:
+        # garth (inside the worker) rewrites this file when Garmin rotates the
+        # refresh token, and it may not write atomically — a torn file must
+        # never reach the store, so anything unparseable reads as "nothing".
+        path = os.path.join(workdir, "garmin_tokens.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                content = f.read()
+            json.loads(content)
+        except (OSError, ValueError):
+            return None
+        return content
 
 
 def _login_error_message(reason: str) -> str:

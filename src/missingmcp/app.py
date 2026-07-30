@@ -55,7 +55,14 @@ def build_app(config: Config) -> Starlette:
     # NOTE: managers share one port range, one DATA_DIR/users/<key> namespace and
     # one workers.json snapshot — safe while garmin is the only worker-based
     # adapter; scope those per adapter before ever adding a second one.
-    managers = {a.name: WorkerManager(config, a.forward)
+    def _persist_blob(adapter_name):
+        # WorkerManager's read-back path: a worker-rotated credential file goes
+        # straight back into the store (persist-before-use, worker edition).
+        def persist(key, blob):
+            store.upsert_account(conn, adapter_name, key, blob, config.gateway_secret)
+        return persist
+
+    managers = {a.name: WorkerManager(config, a.forward, persist=_persist_blob(a.name))
                 for a in adapters.values()
                 if not is_remote(a.forward) and not is_local(a.forward)}
     # 30 min CSRF TTL: people hunt for passwords / wait on MFA mails longer than
@@ -346,6 +353,7 @@ def build_app(config: Config) -> Starlette:
                 with contextlib.suppress(Exception):
                     for manager in managers.values():
                         await manager.reap_idle()
+                        await manager.persist_rotated()
                     store.cleanup_expired_codes(conn)
                     store.cleanup_expired_tokens(conn)
                     _run_data_cleanup(conn, config.orphan_client_ttl, RETIRED_ADAPTERS)

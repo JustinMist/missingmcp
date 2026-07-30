@@ -67,14 +67,19 @@ class WorkerHandle:
 
 
 class WorkerManager:
-    def __init__(self, config, forward, spawn=None, clock=time.monotonic):
+    def __init__(self, config, forward, spawn=None, clock=time.monotonic, persist=None):
         self._cfg = config
         self._forward = forward
         self._clock = clock
         self._spawn_fn = spawn or self._default_spawn
+        self._persist = persist            # (key, blob) -> None; writes the store
         self._workers: dict[str, WorkerHandle] = {}
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._reserved: set[int] = set()   # ports being spawned but not yet registered
+        # Last blob known to be in the store, per account — the baseline a
+        # worker-rewritten token file is compared against. Process-local: after
+        # a restart the first materialize re-seeds it from the store's blob.
+        self._persisted: dict[str, str] = {}
 
     # --- public ---------------------------------------------------------
 
@@ -102,6 +107,13 @@ class WorkerManager:
                 self._terminate(h)
                 self._workers.pop(key, None)
             self._enforce_cap()
+            # The previous worker may have rotated its tokens after the caller
+            # read `blob` from the store (dead worker, or a replace) — persist
+            # the rotation and materialize IT; writing the stale argument would
+            # replay a token the upstream already retired.
+            rotated = self._read_back_and_persist(key, "respawn")
+            if rotated is not None:
+                blob = rotated
             token_dir = self._materialize(key, blob)
             # Reserve the port across the awaited spawn/health-check. Without this,
             # a concurrent ensure_worker for a *different* key (own lock) would see
@@ -156,6 +168,20 @@ class WorkerManager:
             finally:
                 self._reserved.discard(port)
 
+    async def persist_rotated(self) -> None:
+        """Capture worker-written token rotations into the store — the periodic
+        tick of the read-back path (driven from the lifespan loop, like
+        reap_idle). Takes the same per-account lock ensure_worker holds so a
+        read can't interleave with a materialize; a held lock is skipped, not
+        awaited — a spawn in progress does its own read-back."""
+        for key in list(self._workers):
+            lock = self._locks[key]
+            if lock.locked():
+                continue
+            async with lock:
+                if key in self._workers:
+                    self._read_back_and_persist(key, "periodic")
+
     async def reap_idle(self) -> None:
         now = self._clock()
         reaped = False
@@ -167,6 +193,12 @@ class WorkerManager:
             if dead or (idle_expired and h.inflight == 0):
                 self._terminate(h)
                 self._workers.pop(key, None)
+                # Capture any rotation written since the last tick — after the
+                # pop no periodic tick sees this account again. Skip (don't
+                # await) a held lock: reap_idle may run inside ensure_worker's
+                # own critical section, and that path reads the file itself.
+                if not self._locks[key].locked():
+                    self._read_back_and_persist(key, "reap")
                 log("worker-reaped", port=h.port, account=h.key)
                 reaped = True
         if reaped:
@@ -221,6 +253,11 @@ class WorkerManager:
     def shutdown(self) -> None:
         for h in list(self._workers.values()):
             self._terminate(h)
+            # Last chance before the restart: an uncaptured rotation would make
+            # the next boot materialize a spent token from the store. No lock
+            # guard — the server is past accepting requests, and a concurrent
+            # materialize would only make this a no-op (file == store blob).
+            self._read_back_and_persist(h.key, "shutdown")
         self._workers.clear()
         self.write_snapshot()
 
@@ -240,17 +277,52 @@ class WorkerManager:
             oldest = min(idle, key=lambda h: h.last_active)
             self._terminate(oldest)
             self._workers.pop(oldest.key, None)
+            # Same as the reap hook: capture the evictee's last rotation before
+            # it leaves the registry; skip when its lock is held (that spawn
+            # reads the file itself).
+            if not self._locks[oldest.key].locked():
+                self._read_back_and_persist(oldest.key, "evict")
             log("worker-evicted", port=oldest.port, account=oldest.key)
 
-    def _materialize(self, key: str, blob: str) -> str:
+    def _workdir(self, key: str) -> str:
         safe = _SAFE.sub("_", key)
-        user_dir = os.path.join(self._cfg.data_dir, "users", safe)
-        workdir = os.path.join(user_dir, "tokens")
+        return os.path.join(self._cfg.data_dir, "users", safe, "tokens")
+
+    def _materialize(self, key: str, blob: str) -> str:
+        workdir = self._workdir(key)
+        user_dir = os.path.dirname(workdir)
         os.makedirs(workdir, exist_ok=True)
         os.chmod(user_dir, 0o700)
         os.chmod(workdir, 0o700)
         self._forward.materialize(blob, workdir)
+        self._persisted[key] = blob        # the file now mirrors the store
         return workdir
+
+    def _read_back_and_persist(self, key: str, trigger: str) -> str | None:
+        """Persist the worker-rewritten token file to the store when it differs
+        from the last store state this process knows (the WHOOP persist-before-use
+        rule, worker edition). Returns the captured content, else None. With no
+        known baseline (fresh process) it does nothing: a differing file may be
+        OLDER than a re-login that just reached the store, so the store wins —
+        repairing pre-fix drift is the explicit backfill's job, never this path's."""
+        read_back = getattr(self._forward, "read_back", None)
+        if self._persist is None or read_back is None:
+            return None
+        last = self._persisted.get(key)
+        if last is None:
+            return None
+        content = read_back(self._workdir(key))
+        if content is None or content == last:
+            return None
+        try:
+            self._persist(key, content)
+        except Exception as e:  # noqa: BLE001 - store hiccup: keep the baseline, retry next tick
+            log_exc("worker-tokens-persist-failed", e, account=key,
+                    trigger=trigger, error=str(e))
+            return None
+        self._persisted[key] = content
+        log("worker-tokens-persisted", account=key, trigger=trigger)
+        return content
 
     def _alloc_port(self) -> int:
         used = {h.port for h in self._workers.values()} | self._reserved

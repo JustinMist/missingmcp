@@ -57,6 +57,15 @@ class WorkerForward(Protocol):
         """Write credential files into workdir (0600; the manager owns 0700 dirs)."""
         ...
 
+    def read_back(self, workdir: str) -> str | None:
+        """The inverse of materialize: the workdir's current credential content,
+        or None when there is nothing safe to persist (file missing, or torn —
+        the worker may not write atomically). Lets the manager capture upstream
+        token rotations the worker wrote to its file (the WHOOP persist-before-use
+        rule, worker-strategy edition); a worker whose upstream never rotates
+        can simply return None."""
+        ...
+
 
 class RemoteForward(Protocol):
     """Forward strategy A: shared remote MCP upstream, per-account credentials
