@@ -1,7 +1,13 @@
 # 02 — Garmin token materialization is one-way; refreshed tokens are discarded
 
 Type: research
-Status: needs-triage
+Status: resolved
+
+Triaged 2026-07-27 and **answered the same day — the hypothesis holds**: Garmin
+rotates the refresh token and the gateway throws the rotation away, which is the
+root cause of ticket 01's expiries. See "## Answer" below for the measurement and
+"## Fix" for the proposed change; the fix itself is not implemented yet and needs
+its own ticket once the operator picks up the backfill question.
 
 ## Context
 
@@ -54,6 +60,67 @@ is fine; **do not** modify or import `garmin_mcp`.
    actually still starts a worker (it should, garth refreshes). If it does, the
    expiries in ticket 01 come from Garmin-side invalidation instead, and the
    answer to that is ticket 01's option 1 or 3, not this ticket.
+
+## Answer (2026-07-27) — confirmed, and it is the rotation case
+
+Measured on production without touching anyone's account: instead of driving a
+worker, compare **the token file against the DB blob**. `materialize()` writes the
+blob to the file on every spawn and nothing reads it back, so `file != blob` is
+itself proof that the worker wrote something the DB never learned.
+
+```
+garmin accounts:  168
+file == db blob:   79
+file != db blob:   84      <- half the base
+no token file:      5
+```
+
+For every one of the 84, the differing keys are the same two:
+
+```
+{'di_refresh_token': 'value-differs', 'di_token': 'value-differs'}
+```
+
+and the file's mtime is newer than the account's `updated_at` — in several cases by
+more than a day (blob written 2026-07-26 16:24, file rewritten 2026-07-27 12:52).
+
+**So Garmin rotates the refresh token, exactly like WHOOP.** The mechanism behind
+ticket 01's expiries:
+
+1. Sign-in stores `di_token` + `di_refresh_token` (v1) in the blob.
+2. The worker starts from v1, refreshes, receives v2, writes v2 to the file.
+3. The next spawn's `materialize()` truncates the file back to **v1** from the DB.
+4. Garmin has retired v1, so the refresh fails, `garmin_mcp` prints "OAuth tokens
+   not found … Exiting.", and the user is told their session expired.
+
+That also explains the shape ticket 01 saw: accounts work for a few days (while
+some grace on the old token holds, or until the access token needs a refresh) and
+then die, and it hits a third of the base per week. Half the base is sitting in the
+broken state right now — the DB holds a spent refresh token for 84 accounts.
+
+This closes the ticket's question: **not** "merely wasteful", and not Garmin-side
+invalidation. It is our own write-only materialization.
+
+## Fix (proposed, not yet implemented)
+
+A read-back that mirrors the WHOOP invariant — persist the rotated blob to the
+store so the next spawn materializes the *current* token:
+
+- **Where:** not the request hot path (a file read per proxied call buys nothing).
+  Cheap trigger: `stat` the token file and compare mtime against the last value the
+  manager persisted. Do it in the lifespan loop that already runs `reap_idle`, and
+  again when a worker is terminated or the process shuts down.
+- **Restart safety:** deploys are frequent, so a rewrite that is only picked up at
+  reap time would be lost on redeploy. The periodic mtime check covers that; the
+  terminate/shutdown hook is the belt-and-braces path.
+- **Torn writes:** garth may not write atomically. If the file doesn't parse as
+  JSON, skip it and retry on the next tick — never persist a truncated blob.
+- **No new races:** the read-back must take the same per-account lock
+  `ensure_worker` holds, so it cannot interleave with a `materialize()`.
+- **Backfill question for the operator:** the 84 accounts whose file is ahead of the
+  DB can be repaired in place by persisting the file content once, which would save
+  them a forced re-login. It touches stored credentials for real users, so it is a
+  deliberate, separate step — not part of the code change.
 
 ## Design constraint if it does get implemented
 

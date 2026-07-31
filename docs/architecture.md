@@ -153,6 +153,22 @@ manager-owned, credential files come from `forward.materialize` (`0600`).
 into the structured log (`event=worker-log`, `account` attr, ERROR/Traceback
 lines elevated) — no per-user `worker.log` files on the volume.
 
+**Token read-back** (the persist-before-use rule, worker edition): the worker
+rewrites its credential file when the upstream rotates tokens (garth does, on
+Garmin's refresh-token rotation), so the manager persists that file back to the
+store via the injected `persist(key, blob)` callback whenever it differs from
+the last store state this process knows (`_persisted`, seeded by every
+materialize). Capture points: the periodic `persist_rotated()` (lifespan loop,
+under the per-account lock, skipping held locks), the reap/evict paths (the
+account is about to leave the registry), `shutdown()` (deploys are frequent),
+and `ensure_worker`'s respawn path — which then materializes the recovered
+rotation instead of the caller's now-stale blob. A torn (unparseable) file is
+never persisted (`forward.read_back` → None, retried next tick), and a fresh
+process with no baseline trusts the store over the disk — a differing file may
+predate a re-login, so pre-fix drift is repaired only by an explicit backfill.
+Events: `worker-tokens-persisted` / `worker-tokens-persist-failed` (with
+`trigger`).
+
 ### `proxy.py`
 
 `authenticate` (Bearer + rate limits) and `handle_mcp`: a shared core (body

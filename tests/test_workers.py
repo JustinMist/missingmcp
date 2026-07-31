@@ -288,6 +288,218 @@ async def test_materialize_tokens_sets_secure_perms(tmp_path):
     assert stat.S_IMODE(os.stat(os.path.dirname(token_dir)).st_mode) == 0o700
 
 
+def _token_file(tmp_path, key="me@x.cz"):
+    return tmp_path / "users" / key / "tokens" / "garmin_tokens.json"
+
+
+async def test_persist_rotated_captures_worker_rotation(tmp_path, fake_worker):
+    # Garmin rotates the refresh token; the worker (garth) writes the rotation
+    # to its token file. The manager must persist that back to the store —
+    # otherwise the next materialize replays a spent token (the ticket-02 bug).
+    persisted = []
+
+    class FakeProc:
+        def poll(self): return None
+        def terminate(self): pass
+
+    cfg = _config(tmp_path, worker_port_start=fake_worker.port, worker_port_end=fake_worker.port)
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc(),
+                                persist=lambda k, b: persisted.append((k, b)))
+    await mgr.ensure_worker("me@x.cz", '{"v": 1}')
+    await mgr.persist_rotated()
+    assert persisted == []                                # untouched file — nothing rotated
+    _token_file(tmp_path).write_text('{"v": 2}')          # the worker rotated its tokens
+    await mgr.persist_rotated()
+    assert persisted == [("me@x.cz", '{"v": 2}')]
+    await mgr.persist_rotated()
+    assert persisted == [("me@x.cz", '{"v": 2}')]         # unchanged since — no re-persist
+    mgr.shutdown()
+
+
+async def test_persist_rotated_skips_torn_file_until_it_parses(tmp_path, fake_worker):
+    # garth may not write atomically; a half-written file must never reach the
+    # store. The next tick picks the rotation up once the file parses again.
+    persisted = []
+
+    class FakeProc:
+        def poll(self): return None
+        def terminate(self): pass
+
+    cfg = _config(tmp_path, worker_port_start=fake_worker.port, worker_port_end=fake_worker.port)
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc(),
+                                persist=lambda k, b: persisted.append((k, b)))
+    await mgr.ensure_worker("me@x.cz", '{"v": 1}')
+    _token_file(tmp_path).write_text('{"v": 2')           # torn mid-write
+    await mgr.persist_rotated()
+    assert persisted == []
+    _token_file(tmp_path).write_text('{"v": 2}')          # write completed
+    await mgr.persist_rotated()
+    assert persisted == [("me@x.cz", '{"v": 2}')]
+    mgr.shutdown()
+
+
+async def test_reap_idle_captures_last_rotation(tmp_path, fake_worker):
+    # A rotation written after the last periodic tick must be captured when the
+    # worker is reaped — once it leaves the registry no tick will see it again.
+    persisted = []
+    clock = [1000.0]
+
+    class FakeProc:
+        def __init__(self): self.alive = True
+        def poll(self): return None if self.alive else 0
+        def terminate(self): self.alive = False
+
+    cfg = _config(tmp_path, worker_idle_ttl=10,
+                  worker_port_start=fake_worker.port, worker_port_end=fake_worker.port)
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc(),
+                                clock=lambda: clock[0],
+                                persist=lambda k, b: persisted.append((k, b)))
+    await mgr.ensure_worker("me@x.cz", '{"v": 1}')
+    _token_file(tmp_path).write_text('{"v": 2}')
+    clock[0] = 1100.0                                     # past the idle TTL
+    await mgr.reap_idle()
+    assert "me@x.cz" not in [h.key for h in mgr._workers.values()]
+    assert persisted == [("me@x.cz", '{"v": 2}')]
+
+
+async def test_respawn_recovers_rotation_from_dead_worker(tmp_path, fake_worker):
+    # The worker rotated its tokens and then died. The caller still holds the
+    # blob it read from the store BEFORE the rotation was captured — replaying
+    # that spent blob is exactly the ticket-02 bug. The respawn must persist
+    # the rotation and materialize IT, not the stale argument.
+    persisted = []
+    procs = []
+
+    class FakeProc:
+        def __init__(self): self.rc = None
+        def poll(self): return self.rc
+        def terminate(self): pass
+
+    def spawn(key, port, token_dir):
+        procs.append(FakeProc())
+        return procs[-1]
+
+    cfg = _config(tmp_path, worker_port_start=fake_worker.port, worker_port_end=fake_worker.port)
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=spawn,
+                                persist=lambda k, b: persisted.append((k, b)))
+    await mgr.ensure_worker("me@x.cz", '{"v": 1}')
+    _token_file(tmp_path).write_text('{"v": 2}')          # worker rotated...
+    procs[0].rc = 0                                       # ...and died
+    await mgr.ensure_worker("me@x.cz", '{"v": 1}')        # caller's blob is pre-rotation
+    assert persisted == [("me@x.cz", '{"v": 2}')]
+    assert _token_file(tmp_path).read_text() == '{"v": 2}'
+    mgr.shutdown()
+
+
+async def test_fresh_manager_trusts_store_over_disk(tmp_path, fake_worker):
+    # After a process restart the manager has no baseline: a differing file may
+    # be an old generation, not a rotation — e.g. the user re-signed in while
+    # the process was down. The store must win; repairing pre-fix drift is the
+    # explicit backfill's job (reliability ticket 05), never this path's.
+    persisted = []
+
+    class FakeProc:
+        def poll(self): return None
+        def terminate(self): pass
+
+    cfg = _config(tmp_path, worker_port_start=fake_worker.port, worker_port_end=fake_worker.port)
+    _token_file(tmp_path).parent.mkdir(parents=True)
+    _token_file(tmp_path).write_text('{"stale-generation": 1}')
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc(),
+                                persist=lambda k, b: persisted.append((k, b)))
+    await mgr.ensure_worker("me@x.cz", '{"fresh-login": 1}')
+    assert persisted == []
+    assert _token_file(tmp_path).read_text() == '{"fresh-login": 1}'
+    mgr.shutdown()
+
+
+async def test_shutdown_captures_rotations(tmp_path, fake_worker):
+    # Deploys are frequent: a rotation written since the last tick must survive
+    # the restart, or the next boot materializes a spent token from the store.
+    persisted = []
+
+    class FakeProc:
+        def poll(self): return None
+        def terminate(self): pass
+
+    cfg = _config(tmp_path, worker_port_start=fake_worker.port, worker_port_end=fake_worker.port)
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc(),
+                                persist=lambda k, b: persisted.append((k, b)))
+    await mgr.ensure_worker("me@x.cz", '{"v": 1}')
+    _token_file(tmp_path).write_text('{"v": 2}')
+    mgr.shutdown()
+    assert persisted == [("me@x.cz", '{"v": 2}')]
+
+
+async def test_evicted_worker_rotation_is_captured(tmp_path, fake_worker):
+    # An eviction (cap pressure) forgets the worker just like a reap does — its
+    # last rotation must be captured on the way out.
+    persisted = []
+
+    class FakeProc:
+        def poll(self): return None
+        def terminate(self): pass
+
+    cfg = _config(tmp_path, max_workers=1,
+                  worker_port_start=fake_worker.port, worker_port_end=fake_worker.port)
+    mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc(),
+                                persist=lambda k, b: persisted.append((k, b)))
+    await mgr.ensure_worker("me@x.cz", '{"v": 1}')
+    _token_file(tmp_path).write_text('{"v": 2}')
+    mgr._reserved.add(fake_worker.port + 1)               # a distinct-key spawn in flight
+    mgr._enforce_cap()                                    # cap reached -> evict me@x.cz
+    assert "me@x.cz" not in mgr._workers
+    assert persisted == [("me@x.cz", '{"v": 2}')]
+
+
+async def test_read_back_error_does_not_break_the_batch(tmp_path):
+    # The contract doesn't promise read_back never raises, and the capture
+    # points are batch contexts (periodic tick, eviction inside another
+    # account's spawn, shutdown) — one account's disk problem must be logged
+    # and skipped, never propagated into the batch.
+    persisted = []
+
+    class FakeProc:
+        def poll(self): return None
+        def terminate(self): pass
+
+    class ExplodingReadBack(GarminWorkerForward):
+        def read_back(self, workdir):
+            if "a@x.cz" in workdir:
+                raise RuntimeError("disk went away")
+            return super().read_back(workdir)
+
+    cfg = _config(tmp_path, worker_port_start=59900, worker_port_end=59901)
+    mgr = workers.WorkerManager(cfg, ExplodingReadBack(cfg), spawn=lambda *a: FakeProc(),
+                                persist=lambda k, b: persisted.append((k, b)))
+
+    async def always_healthy(port):
+        return True
+
+    mgr._healthy = always_healthy
+    await mgr.ensure_worker("a@x.cz", '{"v": 1}')
+    await mgr.ensure_worker("b@x.cz", '{"v": 1}')
+    _token_file(tmp_path, "a@x.cz").write_text('{"v": 2}')
+    _token_file(tmp_path, "b@x.cz").write_text('{"v": 2}')
+    await mgr.persist_rotated()                           # must not raise
+    assert persisted == [("b@x.cz", '{"v": 2}')]          # A skipped, B still captured
+    mgr.shutdown()                                        # must not raise either
+
+
+def test_read_back_returns_current_token_file(tmp_path):
+    # The worker (garth) rewrites garmin_tokens.json when Garmin rotates the
+    # refresh token; read_back is how the gateway learns the current content.
+    cfg = _config(tmp_path)
+    fwd = GarminWorkerForward(cfg)
+    assert fwd.read_back(str(tmp_path)) is None            # no file yet
+    fwd.materialize('{"t": 1}', str(tmp_path))
+    assert fwd.read_back(str(tmp_path)) == '{"t": 1}'
+    # garth may not write atomically — a torn (unparseable) file must never
+    # be persisted; report "nothing to read" and let the next tick retry.
+    (tmp_path / "garmin_tokens.json").write_text('{"t": 1')
+    assert fwd.read_back(str(tmp_path)) is None
+
+
 async def test_manager_delegates_to_forward(tmp_path, fake_worker):
     calls = []
 
