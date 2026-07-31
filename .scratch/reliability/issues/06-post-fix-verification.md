@@ -21,3 +21,12 @@ The answer gates two decisions: the mail channel
 ([07](07-mail-channel-decision.md) — if expiries collapse to near-zero, mail
 may be unnecessary) and the triage rollout tuning (follow-up of
 [08](08-autonomous-triage-design.md)). Aggregates only — public repo.
+
+## Comments
+
+- 2026-07-31: a **scheduled cloud agent** will resolve this ticket — one-off
+  routine "Reliability 06 — post-fix measurement" fires 2026-08-07T14:30Z
+  (7 days after the fix + backfill went live), measures the window from
+  2026-07-31T14:00Z via PostHog, and opens a PR with the resolution
+  (branch `research/post-fix-verification`). Don't work this ticket by hand
+  before then unless the routine failed.
