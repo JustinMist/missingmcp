@@ -58,3 +58,9 @@ test_upstream_auth_rejection_maps_to_reauth_401`, `test_local_forward.py::
 test_session_expired_maps_to_reauth_401`, `test_whoop_e2e.py::
 test_stale_refresh_maps_to_reauth_401` (full-middleware, confirms the header
 survives). Full suite 256 passed.
+
+## Comments
+
+- 2026-07-30: the remaining open item (§1, last_seen orphan sweep) is now
+  tracked as ticket 04 on the **reliability map**
+  (`.scratch/reliability/map.md`) — claim it there, not here.

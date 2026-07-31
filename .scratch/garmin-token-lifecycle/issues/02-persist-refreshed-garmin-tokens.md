@@ -129,3 +129,9 @@ the file, the gateway owns the DB row. Whatever the mechanism, it must not race 
 concurrent `materialize` for the same account (which holds the per-account
 `asyncio.Lock` in `ensure_worker`) and must not write a partially-written file.
 The WHOOP rule — persist before use, serialized per account — is the precedent.
+
+## Comments
+
+- 2026-07-30: the fix now has its implementation ticket — **reliability map**
+  (`.scratch/reliability/map.md`) ticket 02; the backfill question is its
+  ticket 05. Nothing further happens in this file.

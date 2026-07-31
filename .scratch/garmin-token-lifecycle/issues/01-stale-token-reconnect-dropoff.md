@@ -138,3 +138,10 @@ around it is small and can be specified as its own ticket.
 
 Recommended order: verify ticket 02 first (cheap, might shrink the problem), then
 decide on the mail channel.
+
+## Comments
+
+- 2026-07-30: carried forward on the **reliability map**
+  (`.scratch/reliability/map.md`). The mail-channel decision is its ticket 07
+  (blocked by post-fix verification, ticket 06); the copy improvement
+  (option 3) is its ticket 03. Nothing further happens in this file.
