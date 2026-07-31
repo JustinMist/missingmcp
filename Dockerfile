@@ -15,8 +15,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends git tini && rm 
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 COPY scripts ./scripts
+# mcp<2: garmin_mcp is written against the mcp 1.x API (mcp.server.fastmcp) and
+# doesn't bound its own dependency — mcp 2.0.0 (2026-07-28) removed that module,
+# and the first image rebuild after the release crashed every worker spawn with
+# ModuleNotFoundError (2026-07-31 incident). The worker's other deps float too;
+# pin here, in the same resolve, whenever one of them breaks the same way.
 RUN uv pip install --system . && \
-    uv pip install --system "garmin-mcp @ git+https://github.com/Taxuspt/garmin_mcp@${GARMIN_MCP_REF}"
+    uv pip install --system "garmin-mcp @ git+https://github.com/Taxuspt/garmin_mcp@${GARMIN_MCP_REF}" "mcp<2"
 ENTRYPOINT ["tini", "--"]
 CMD ["missingmcp"]
 EXPOSE 8080
