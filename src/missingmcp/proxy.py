@@ -115,10 +115,18 @@ def _reauth_required(config, adapter) -> JSONResponse:
     challenge = (f'Bearer error="invalid_token", '
                  f'error_description="stored {adapter.display_name} session expired", '
                  f'resource_metadata="{resource_meta}"')
+    # The one string an affected user reliably sees (clients surface it when the
+    # tool call fails), so it carries the complete recovery instruction — what
+    # "reconnect" concretely means and where to get help — not just the verb.
+    # Only ~5% of users are at the keyboard when the 401 lands; the rest read
+    # this hours later (garmin-token-lifecycle drop-off measurement).
+    x = adapter.display_name
     return JSONResponse(
         {"error": "invalid_token",
-         "message": f"Your {adapter.display_name} session expired. "
-                    f"Please reconnect the {adapter.display_name} MCP server."},
+         "message": f"Your {x} session expired. Please sign in to {x} again "
+                    f"to reconnect — your MCP client will prompt you (in Claude: "
+                    f"Settings → Connectors → {x}). "
+                    f"Help: {config.public_url}/{adapter.name}"},
         status_code=401,
         headers={"WWW-Authenticate": challenge},
     )

@@ -66,8 +66,10 @@ def test_session_expired_maps_to_reauth_401():
     assert r.status_code == 401     # RFC 9728 challenge, not a dead-end 502
     assert r.json() == {
         "error": "invalid_token",
-        "message": "Your AcmeLocal session expired. "
-                   "Please reconnect the AcmeLocal MCP server.",
+        "message": "Your AcmeLocal session expired. Please sign in to AcmeLocal "
+                   "again to reconnect — your MCP client will prompt you (in "
+                   "Claude: Settings → Connectors → AcmeLocal). "
+                   "Help: https://x/acmelocal",
     }
     assert 'resource_metadata="https://x/.well-known/oauth-protected-resource/acmelocal/mcp"' \
         in r.headers["www-authenticate"]

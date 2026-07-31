@@ -84,7 +84,11 @@ def test_worker_start_failure_maps_to_reauth_401(tmp_path, fake_worker):
     assert r.status_code == 401
     assert r.json() == {                       # stable error shape, byte-for-byte
         "error": "invalid_token",
-        "message": "Your Garmin session expired. Please reconnect the Garmin MCP server.",
+        # The one string an affected user reliably sees — it carries the full
+        # recovery instruction, not just "reconnect" (reliability ticket 03).
+        "message": "Your Garmin session expired. Please sign in to Garmin again "
+                   "to reconnect — your MCP client will prompt you (in Claude: "
+                   "Settings → Connectors → Garmin). Help: https://x/garmin",
     }
     wa = r.headers["www-authenticate"]
     assert wa.startswith("Bearer ")
@@ -115,7 +119,9 @@ def test_stale_credentials_worker_exit_maps_to_reauth_401(tmp_path, fake_worker)
     assert r.status_code == 401
     assert r.json() == {
         "error": "invalid_token",
-        "message": "Your Garmin session expired. Please reconnect the Garmin MCP server.",
+        "message": "Your Garmin session expired. Please sign in to Garmin again "
+                   "to reconnect — your MCP client will prompt you (in Claude: "
+                   "Settings → Connectors → Garmin). Help: https://x/garmin",
     }
     assert 'resource_metadata="https://x/.well-known/oauth-protected-resource/garmin/mcp"' \
         in r.headers["www-authenticate"]
