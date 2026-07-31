@@ -26,3 +26,18 @@ Decide, informed by [01](01-digest-error-breakdown.md)'s error breakdown:
   separate follow-up question (see the map's Not yet specified).
 
 The implementation becomes a follow-up ticket once this decides the shape.
+
+## Comments
+
+- 2026-07-31: live validation of one signature family — the mcp 2.0.0 worker
+  outage (every spawn `worker-died` rc=1 on `ModuleNotFoundError`; see the
+  `fix(docker): pin mcp<2` commit). The PostHog "Worker start failures
+  ≥3/hour" alert correctly paged (33/h), the operator pasted it in, and the
+  diagnosis needed: error-class breakdown → one account's full worker-log
+  timeline → the crash traceback → Dockerfile. Exactly the analyze-then-
+  propose loop this ticket wants to automate. Signature material: a burst of
+  `worker-died` rc≠0 across MANY distinct accounts right after a deploy =
+  gateway/image fault, page with the traceback and the suspect deploy; the
+  same event on ONE account = maybe that account, hold. Also note the
+  cascade: users answer the re-auth 401 and re-sign-in in vain — a triage
+  message should distinguish "credentials problem" from "our fault" fast.
