@@ -311,7 +311,14 @@ class WorkerManager:
         last = self._persisted.get(key)
         if last is None:
             return None
-        content = read_back(self._workdir(key))
+        try:
+            content = read_back(self._workdir(key))
+        except Exception as e:  # noqa: BLE001 - callers are batch contexts (tick, evict inside
+            # another account's spawn, shutdown): one account's disk problem is
+            # logged and skipped, never propagated into the batch.
+            log_exc("worker-tokens-persist-failed", e, account=key,
+                    trigger=trigger, error=str(e))
+            return None
         if content is None or content == last:
             return None
         try:

@@ -452,6 +452,40 @@ async def test_evicted_worker_rotation_is_captured(tmp_path, fake_worker):
     assert persisted == [("me@x.cz", '{"v": 2}')]
 
 
+async def test_read_back_error_does_not_break_the_batch(tmp_path):
+    # The contract doesn't promise read_back never raises, and the capture
+    # points are batch contexts (periodic tick, eviction inside another
+    # account's spawn, shutdown) — one account's disk problem must be logged
+    # and skipped, never propagated into the batch.
+    persisted = []
+
+    class FakeProc:
+        def poll(self): return None
+        def terminate(self): pass
+
+    class ExplodingReadBack(GarminWorkerForward):
+        def read_back(self, workdir):
+            if "a@x.cz" in workdir:
+                raise RuntimeError("disk went away")
+            return super().read_back(workdir)
+
+    cfg = _config(tmp_path, worker_port_start=59900, worker_port_end=59901)
+    mgr = workers.WorkerManager(cfg, ExplodingReadBack(cfg), spawn=lambda *a: FakeProc(),
+                                persist=lambda k, b: persisted.append((k, b)))
+
+    async def always_healthy(port):
+        return True
+
+    mgr._healthy = always_healthy
+    await mgr.ensure_worker("a@x.cz", '{"v": 1}')
+    await mgr.ensure_worker("b@x.cz", '{"v": 1}')
+    _token_file(tmp_path, "a@x.cz").write_text('{"v": 2}')
+    _token_file(tmp_path, "b@x.cz").write_text('{"v": 2}')
+    await mgr.persist_rotated()                           # must not raise
+    assert persisted == [("b@x.cz", '{"v": 2}')]          # A skipped, B still captured
+    mgr.shutdown()                                        # must not raise either
+
+
 def test_read_back_returns_current_token_file(tmp_path):
     # The worker (garth) rewrites garmin_tokens.json when Garmin rotates the
     # refresh token; read_back is how the gateway learns the current content.
