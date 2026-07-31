@@ -65,6 +65,11 @@ Three things are true at the end of this map:
   recovered rotation instead of the stale DB blob. Pre-fix drifted accounts
   (~84) are deliberately untouched — unblocks the
   [backfill decision](issues/05-backfill-decision.md).
+- [Make the re-auth message carry the full instruction](issues/03-reauth-message-copy.md)
+  — shipped (PR #16, merge `6779bc0`): the 401 body now spells out the
+  recovery (sign in again when the client prompts; Claude: Settings →
+  Connectors) and links the connector's landing page. Copy only, challenge
+  shape and events unchanged.
 
 ## Not yet specified
 
