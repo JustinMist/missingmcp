@@ -1,7 +1,7 @@
 # 05 — Backfill: repair the ~84 accounts whose DB blob holds a spent token?
 
 Type: grilling
-Status: open
+Status: resolved
 Blocked by: 02
 
 ## Question
@@ -22,3 +22,31 @@ execution allowed once decided).
 
 Note: accounts whose file holds an *already-expired* rotation can't be saved
 by backfill; count them, don't guess.
+
+## Answer (2026-07-31)
+
+**Decision: yes** — the operator ordered the repair ("udelej backfill") and
+approved the apply after reviewing the dry-run. Executed the same day via
+`scripts/backfill_garmin_tokens.py` (shipped on main; dry-run by default,
+masked keys, WAL-safe beside the live gateway, idempotent).
+
+Safety rule that made it safe: a file is persisted only when it parses,
+differs from the DB blob, **and is newer than `updated_at`** — a re-login
+after the file was written always wins (the gateway's unknown-provenance rule,
+applied here too).
+
+Production numbers (244 garmin accounts — the base grew since the 84/168
+measurement on 2026-07-27):
+
+| verdict | count |
+|---|---|
+| persisted (drifted, repaired) | **117** |
+| in-sync | 116 |
+| db-newer (recent re-logins, correctly skipped — incl. today's outage re-signs) | 5 |
+| no-file | 6 |
+| torn | 0 |
+
+Verification: a second dry-run right after reads **0 drifted / 233 in-sync**.
+Those 117 accounts will materialize their latest working rotation on the next
+spawn instead of a spent token — no forced re-login. How many expiries remain
+overall is [ticket 06](06-post-fix-verification.md)'s measurement (~a week).

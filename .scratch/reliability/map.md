@@ -70,6 +70,12 @@ Three things are true at the end of this map:
   recovery (sign in again when the client prompts; Claude: Settings →
   Connectors) and links the connector's landing page. Copy only, challenge
   shape and events unchanged.
+- [Backfill: repair the accounts whose DB blob holds a spent token](issues/05-backfill-decision.md)
+  — done (operator-approved, 2026-07-31): `scripts/backfill_garmin_tokens.py`
+  persisted **117 drifted accounts**' latest rotation into the store (5 recent
+  re-logins correctly skipped by the mtime-vs-updated_at guard; second run
+  reads 0 drifted). Unblocks [post-fix verification](issues/06-post-fix-verification.md)
+  (~a week of data).
 
 ## Not yet specified
 
