@@ -61,7 +61,7 @@ def test_snapshot_is_a_consistent_sqlite_copy(tmp_path):
     restored = tmp_path / "restored.db"
     restored.write_bytes(body)
     rc = sqlite3.connect(str(restored))
-    assert rc.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert rc.execute("PRAGMA user_version").fetchone()[0] == 2
     rows = rc.execute("SELECT adapter, account_key FROM accounts").fetchall()
     assert rows == [("garmin", "me@x.cz")]
     # the copy must be self-contained (no dangling WAL dependency)

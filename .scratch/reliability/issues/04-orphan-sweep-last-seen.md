@@ -1,7 +1,7 @@
 # 04 — Sweep orphan OAuth clients by last_seen, not creation age
 
 Type: task
-Status: open
+Status: claimed
 
 Execution ticket (hybrid map — already specified in
 [oauth-client-lifecycle §1](../../oauth-client-lifecycle/issue.md)).

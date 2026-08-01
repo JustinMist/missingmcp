@@ -20,7 +20,8 @@ def test_run_data_cleanup_purges_retired_and_sweeps_orphans_with_logs(capsys):
     store.create_client(conn, "rc", "sh", ["https://a/cb"], "Claude", "rohlik")
     # An old, token-less garmin client — an abandoned DCR.
     store.create_client(conn, "old_orphan", "sh", ["https://a/cb"], "Claude", "garmin")
-    conn.execute("UPDATE oauth_clients SET created_at=datetime('now','-2 hours')")
+    conn.execute("UPDATE oauth_clients SET created_at=datetime('now','-2 hours'), "
+                 "last_seen=datetime('now','-2 hours')")   # unused since registration
     conn.commit()
 
     _run_data_cleanup(conn, orphan_ttl=3600, retired_adapters={"rohlik"})

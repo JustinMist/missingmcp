@@ -215,7 +215,8 @@ no email sent).
 
 The lifespan periodically reaps idle workers (all managers) and runs data
 hygiene — cleans expired codes/tokens, sweeps abandoned OAuth clients (0 tokens,
-older than `config.orphan_client_ttl`), and fully purges any
+unused — `last_seen`, stamped by `get_client` on every authorize/token use —
+for longer than `config.orphan_client_ttl`), and fully purges any
 `adapters.RETIRED_ADAPTERS` data (`_run_data_cleanup`; see
 [ADR-0001](adr/0001-retired-adapter-cleanup.md)). `main()` is the `missingmcp`
 console entrypoint.

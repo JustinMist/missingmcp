@@ -22,6 +22,18 @@ following the existing guarded-migration pattern), update it on every
 authorize/token use, and sweep on `last_seen < cutoff` instead of
 `created_at`. Keeps scanner-spam bounded while never racing a real client.
 
+### Resolution (2026-08-01)
+
+Implemented as reliability ticket 04 (branch `fix/orphan-sweep-last-seen`):
+`user_version` 1→2 migration adds `last_seen` (existing rows seeded from
+`created_at`, fresh DBs get it in `_SCHEMA` with a `datetime('now')` default);
+`store.get_client` stamps it on every read — the single gate all
+authorize/token paths flow through (the `account_key_for_token_hash`/
+`last_used` idiom); `cleanup_orphan_clients` deletes on
+`COALESCE(last_seen, created_at) < cutoff` + no live token. Tests: migration
+backfill + idempotence, stamp-on-use, and the sweep matrix including the case
+this issue is about — an old-by-creation but recently-used client survives.
+
 ## 2. Return 401 (not 502) when upstream tokens are dead
 
 When a worker can't start because the account's Garmin tokens are gone
