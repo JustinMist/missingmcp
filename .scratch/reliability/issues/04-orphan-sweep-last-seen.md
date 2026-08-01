@@ -15,3 +15,11 @@ Implement §1 of the oauth-client-lifecycle issue: add `last_seen` to
 for users returning after a >30-day pause while keeping scanner-spam bounded.
 
 Feature branch + PR; tests for the migration and the sweep behaviour.
+
+## Comments
+
+- 2026-08-01: implemented on `fix/orphan-sweep-last-seen`, **PR #17 open**
+  (https://github.com/VelkyVenik/missingmcp/pull/17), awaiting CodeRabbit +
+  merge. `last_seen` stamped inside `store.get_client` (the single gate);
+  migration seeds existing rows from `created_at`; suite 373 passed.
+  Resolves on merge + deploy.
