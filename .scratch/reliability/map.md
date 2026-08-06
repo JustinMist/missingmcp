@@ -88,6 +88,9 @@ Three things are true at the end of this map:
   only if ticket 07 decides mail is needed.
 - **PostHog alerts/funnels realignment after the fix** (e.g. the
   "Worker start failures ≥3/hour" alert) — depends on ticket 06's numbers.
+- **Fix for the mid-stream failure class** — once
+  [09](issues/09-midstream-asgi-failures.md) establishes the mechanism
+  (read-timeout vs client hang-up) and the impact.
 - **Whether the triage mechanism may autonomously file tickets into
   `.scratch/`** — an autonomy-boundary question for after 08.
 
