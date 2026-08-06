@@ -70,6 +70,11 @@ Three things are true at the end of this map:
   recovery (sign in again when the client prompts; Claude: Settings →
   Connectors) and links the connector's landing page. Copy only, challenge
   shape and events unchanged.
+- [Sweep orphan OAuth clients by last_seen](issues/04-orphan-sweep-last-seen.md)
+  — shipped (PR #17, merge `6364359`): `last_seen` column (v2 migration),
+  stamped by `get_client` on every authorize/token use; the sweep keys on
+  activity, so returning users no longer hit "unknown client_id". Closes
+  oauth-client-lifecycle §1.
 - [Backfill: repair the accounts whose DB blob holds a spent token](issues/05-backfill-decision.md)
   — done (operator-approved, 2026-07-31): `scripts/backfill_garmin_tokens.py`
   persisted **117 drifted accounts**' latest rotation into the store (5 recent
