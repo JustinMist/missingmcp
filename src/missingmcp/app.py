@@ -35,9 +35,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 def _run_data_cleanup(conn, orphan_ttl: int, retired_adapters) -> None:
     """One pass of data-hygiene cleanup, driven from the lifespan loop: fully
     purge any retired adapter's rows, then sweep abandoned OAuth clients (0 tokens,
-    older than orphan_ttl). Purge runs first so a retired adapter's clients are
-    reported under the purge, not double-counted as orphans. Logs only when it
-    actually deleted something — the loop runs every 60s and is usually a no-op."""
+    unused — last_seen — for longer than orphan_ttl). Purge runs first so a
+    retired adapter's clients are reported under the purge, not double-counted
+    as orphans. Logs only when it actually deleted something — the loop runs
+    every 60s and is usually a no-op."""
     for name in retired_adapters:
         counts = store.purge_adapter(conn, name)
         if any(counts.values()):

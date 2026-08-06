@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS oauth_clients (
     client_secret_hash TEXT NOT NULL,
     redirect_uris      TEXT NOT NULL,
     client_name        TEXT,
-    created_at         TEXT DEFAULT (datetime('now'))
+    created_at         TEXT DEFAULT (datetime('now')),
+    last_seen          TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS oauth_codes (
     code_hash             TEXT PRIMARY KEY,
@@ -132,27 +133,44 @@ _MIGRATE_V1 = [
 
 def _migrate(conn) -> None:
     """Bring an existing DB to the current schema version. Guarded by
-    PRAGMA user_version; idempotent. Fresh DBs (no legacy table) are just stamped."""
-    if conn.execute("PRAGMA user_version").fetchone()[0] >= 1:
-        return
-    has_legacy = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='garmin_accounts'"
-    ).fetchone() is not None
-    if has_legacy:
-        # Explicit transaction: sqlite3 only auto-opens one before DML, so the
-        # leading CREATE TABLE (DDL) would otherwise auto-commit outside any
-        # rollback scope. BEGIN makes the whole migration atomic — a crash
-        # mid-migration rolls back cleanly and the DB stays re-migratable.
-        conn.execute("BEGIN")
-        try:
-            for stmt in _MIGRATE_V1:
-                conn.execute(stmt)
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-    conn.execute("PRAGMA user_version = 1")
-    conn.commit()
+    PRAGMA user_version; idempotent. Fresh DBs (no tables yet) are just stamped
+    — _SCHEMA creates them in their current shape afterwards."""
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version < 1:
+        has_legacy = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='garmin_accounts'"
+        ).fetchone() is not None
+        if has_legacy:
+            # Explicit transaction: sqlite3 only auto-opens one before DML, so the
+            # leading CREATE TABLE (DDL) would otherwise auto-commit outside any
+            # rollback scope. BEGIN makes the whole migration atomic — a crash
+            # mid-migration rolls back cleanly and the DB stays re-migratable.
+            conn.execute("BEGIN")
+            try:
+                for stmt in _MIGRATE_V1:
+                    conn.execute(stmt)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+    if version < 2:
+        # v2: oauth_clients.last_seen — the orphan sweep keys on last activity,
+        # not creation age (oauth-client-lifecycle §1 / reliability ticket 04).
+        # Existing rows seed last_seen from created_at so a just-migrated DB
+        # neither insta-sweeps everything nor keeps NULLs forever.
+        has_clients = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='oauth_clients'"
+        ).fetchone() is not None
+        if has_clients:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(oauth_clients)")}
+            if "last_seen" not in cols:
+                conn.execute("ALTER TABLE oauth_clients ADD COLUMN last_seen TEXT")
+                conn.execute("UPDATE oauth_clients SET last_seen = created_at "
+                             "WHERE last_seen IS NULL")
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
 
 
 def init_db(db_path: str) -> sqlite3.Connection:
@@ -385,6 +403,13 @@ def get_client(conn, client_id) -> dict | None:
     ).fetchone()
     if row is None:
         return None
+    # Every authorize/token use flows through here — stamp last_seen on read
+    # (the account_key_for_token_hash/last_used idiom), so a long-idle but
+    # still-cached client (Claude re-uses a DCR registration for months) never
+    # ages into the orphan sweep while it is actually being used.
+    conn.execute("UPDATE oauth_clients SET last_seen=datetime('now') WHERE client_id=?",
+                 (client_id,))
+    conn.commit()
     return {
         "client_secret_hash": row["client_secret_hash"],
         "redirect_uris": json.loads(row["redirect_uris"]),
@@ -392,15 +417,18 @@ def get_client(conn, client_id) -> dict | None:
 
 
 def cleanup_orphan_clients(conn, older_than_seconds: int) -> int:
-    """Delete OAuth clients with no live access token that are older than the
+    """Delete OAuth clients with no live access token that have not been USED
+    (last_seen, stamped by get_client on every authorize/token use) within the
     cutoff — abandoned DCR registrations (directory scanners register clients
-    they never use). NOTE: real clients (Claude, ChatGPT) CACHE their
-    registration per org and re-use it for later re-authorizations, so the
-    cutoff must be generous (days, not hours) — sweeping a cached client
-    strands its users on "unknown client_id" until they remove + re-add the
-    connector. Returns rows deleted."""
+    they never use). Keyed on activity, not creation age: real clients (Claude,
+    ChatGPT) CACHE their registration per org and re-use it for months, and
+    sweeping a cached-but-active client strands its users on "unknown
+    client_id" until they remove + re-add the connector
+    (oauth-client-lifecycle §1). The cutoff still must be generous (days, not
+    hours). Returns rows deleted."""
     cur = conn.execute(
-        "DELETE FROM oauth_clients WHERE created_at < datetime('now', ?) "
+        "DELETE FROM oauth_clients "
+        "WHERE COALESCE(last_seen, created_at) < datetime('now', ?) "
         "AND NOT EXISTS (SELECT 1 FROM access_tokens t WHERE t.client_id = oauth_clients.client_id)",
         (f"-{int(older_than_seconds)} seconds",),
     )

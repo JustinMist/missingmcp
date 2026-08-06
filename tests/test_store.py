@@ -162,18 +162,24 @@ def test_cleanup_expired_codes_removes_only_expired(conn):
     assert hashes == {"valid"}
 
 
-def test_cleanup_orphan_clients_removes_old_tokenless_only(conn):
-    # An orphan (0 tokens) older than the threshold — a DCR whose OAuth never
-    # completed. This is the one that must go.
-    store.create_client(conn, "old_orphan", "sh", ["https://a/cb"], "Claude", "garmin")
+def test_cleanup_orphan_clients_sweeps_by_last_activity(conn):
+    # An orphan (0 tokens) UNUSED longer than the threshold — a DCR whose OAuth
+    # never completed, or a registration nothing touched since. This one goes.
+    store.create_client(conn, "old_unused", "sh", ["https://a/cb"], "Claude", "garmin")
+    conn.execute("UPDATE oauth_clients SET created_at=datetime('now','-2 hours'), "
+                 "last_seen=datetime('now','-2 hours') WHERE client_id='old_unused'")
+    # Old by CREATION but recently used (a cached Claude-org registration whose
+    # user came back after a pause) — sweeping it would strand the user on
+    # "unknown client_id" (oauth-client-lifecycle §1). Must be kept.
+    store.create_client(conn, "old_but_used", "sh", ["https://a/cb"], "Claude", "garmin")
     conn.execute("UPDATE oauth_clients SET created_at=datetime('now','-2 hours') "
-                 "WHERE client_id='old_orphan'")
+                 "WHERE client_id='old_but_used'")
     # A fresh orphan — could still be an in-flight OAuth flow; must be kept.
     store.create_client(conn, "fresh_orphan", "sh", ["https://a/cb"], "Claude", "garmin")
-    # A client that produced a token — kept regardless of age.
+    # A client that produced a token — kept regardless of age or activity.
     store.create_client(conn, "has_token", "sh", ["https://a/cb"], "Claude", "garmin")
-    conn.execute("UPDATE oauth_clients SET created_at=datetime('now','-2 hours') "
-                 "WHERE client_id='has_token'")
+    conn.execute("UPDATE oauth_clients SET created_at=datetime('now','-2 hours'), "
+                 "last_seen=datetime('now','-2 hours') WHERE client_id='has_token'")
     store.create_access_token(conn, "tok1", "garmin", "me@x.cz", "has_token")
     conn.commit()
 
@@ -181,7 +187,22 @@ def test_cleanup_orphan_clients_removes_old_tokenless_only(conn):
 
     assert deleted == 1
     remaining = {r["client_id"] for r in conn.execute("SELECT client_id FROM oauth_clients")}
-    assert remaining == {"fresh_orphan", "has_token"}
+    assert remaining == {"old_but_used", "fresh_orphan", "has_token"}
+
+
+def test_get_client_stamps_last_seen(conn):
+    # Every authorize/token use flows through get_client; the stamp is what
+    # keeps a long-idle but still-cached client out of the orphan sweep.
+    store.create_client(conn, "c1", "sh", ["https://a/cb"], "Claude", "garmin")
+    conn.execute("UPDATE oauth_clients SET last_seen=datetime('now','-40 days') "
+                 "WHERE client_id='c1'")
+    conn.commit()
+    assert store.get_client(conn, "c1") is not None
+    seen = conn.execute(
+        "SELECT last_seen >= datetime('now','-1 minute') AS fresh FROM oauth_clients "
+        "WHERE client_id='c1'").fetchone()["fresh"]
+    assert seen == 1
+    assert store.get_client(conn, "nope") is None    # unknown id: no crash, no stamp
 
 
 def test_purge_adapter_removes_all_rows_for_that_adapter_only(conn):
@@ -264,7 +285,7 @@ def test_migration_v0_to_v1_preserves_data(tmp_path):
     tu = conn.execute("SELECT adapter, account_key, calls FROM tool_usage").fetchone()
     assert (tu["adapter"], tu["account_key"], tu["calls"]) == ("garmin", "me@x.cz", 5)
     assert conn.execute("SELECT adapter FROM oauth_clients WHERE client_id='c1'").fetchone()["adapter"] == "garmin"
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
     assert conn.execute(
         "SELECT COUNT(*) FROM sqlite_master WHERE name='garmin_accounts'").fetchone()[0] == 0
     conn.close()
@@ -276,7 +297,7 @@ def test_migration_is_idempotent(tmp_path):
     store.init_db(db).close()          # migrate once
     conn = store.init_db(db)           # re-open: must be a no-op, data intact
     assert conn.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] == 1
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
     conn.close()
 
 
@@ -296,7 +317,43 @@ def test_migration_rolls_back_and_stays_remigratable(tmp_path, monkeypatch):
     conn = store.init_db(db)
     row = conn.execute("SELECT adapter, account_key, blob_enc FROM accounts").fetchone()
     assert (row["adapter"], row["account_key"], row["blob_enc"]) == ("garmin", "me@x.cz", "NONCE:CIPHER")
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    conn.close()
+
+
+def _build_v1_db(path: str) -> None:
+    """A pre-last_seen (user_version 1) DB: adapter-aware schema, but
+    oauth_clients has no last_seen column."""
+    import sqlite3
+    c = sqlite3.connect(path)
+    c.executescript("""
+        PRAGMA user_version = 1;
+        CREATE TABLE oauth_clients (
+            client_id TEXT PRIMARY KEY, adapter TEXT NOT NULL,
+            client_secret_hash TEXT NOT NULL, redirect_uris TEXT NOT NULL,
+            client_name TEXT, created_at TEXT DEFAULT (datetime('now')));
+        INSERT INTO oauth_clients (client_id, adapter, client_secret_hash, redirect_uris,
+                                   client_name, created_at)
+            VALUES ('c1', 'garmin', 'sh', '["https://a/cb"]', 'Claude',
+                    '2026-06-01 10:00:00');
+    """)
+    c.commit(); c.close()
+
+
+def test_migration_v1_to_v2_backfills_last_seen(tmp_path):
+    db = str(tmp_path / "v1.db")
+    _build_v1_db(db)
+    conn = store.init_db(db)
+    # existing rows: last_seen seeded from created_at, so a just-migrated DB
+    # doesn't insta-sweep everything (nor keep NULLs forever)
+    row = conn.execute(
+        "SELECT last_seen, created_at FROM oauth_clients WHERE client_id='c1'").fetchone()
+    assert row["last_seen"] == row["created_at"] == "2026-06-01 10:00:00"
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    # re-open: idempotent
+    conn.close()
+    conn = store.init_db(db)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
     conn.close()
 
 
