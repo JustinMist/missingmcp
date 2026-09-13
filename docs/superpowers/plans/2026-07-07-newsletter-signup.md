@@ -389,7 +389,7 @@ Append to `tests/test_app.py`:
 def test_home_has_signup_modals_not_github_link(tmp_path):
     r = _client(tmp_path).get("/").text
     # the old GitHub-issues link in the card is gone (GitHub stays only in footer/security)
-    assert "github.com/VelkyVenik/missingmcp/issues/new" not in r
+    assert "github.com/JustinMist/missingmcp/issues/new" not in r
     # two buttons open the two modals
     assert 'data-modal="suggest"' in r
     assert 'data-modal="subscribe"' in r
@@ -404,7 +404,7 @@ def test_home_has_signup_modals_not_github_link(tmp_path):
 def test_github_still_reachable_in_footer(tmp_path):
     # removing the card link must not remove GitHub from the site entirely
     r = _client(tmp_path).get("/").text
-    assert 'href="https://github.com/VelkyVenik/missingmcp"' in r
+    assert 'href="https://github.com/JustinMist/missingmcp"' in r
 
 
 def test_site_js_has_modal_behavior(tmp_path):
@@ -426,7 +426,7 @@ In `src/missingmcp/templates/home.html`, replace this block:
         <div class="card">
           <h3>Missing something?</h3>
           <p>Every connector here started as &ldquo;I wish Claude could&hellip;&rdquo;. Tell me which app should be next.</p>
-          <a class="go" href="https://github.com/VelkyVenik/missingmcp/issues/new">Suggest a connector &rarr;</a>
+          <a class="go" href="https://github.com/JustinMist/missingmcp/issues/new">Suggest a connector &rarr;</a>
         </div>
 ```
 

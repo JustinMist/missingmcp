@@ -143,7 +143,7 @@ Reorder outcome-first; keep the honest under-the-hood line (credibility + SEO).
 
 - **Rebrand / new domain** — decided against. An optional self-explanatory
   alias may redirect in later (non-breaking); not now.
-- **The 25-user migration message** (garmin.slajs.eu → `missingmcp.com`) —
+- **The 25-user migration message** (the legacy Garmin domain → `missingmcp.com`) —
   separate task; now unblocked (domain is settled).
 - **Tah 2** — the LinkedIn demo video.
 - **Vertical framework / second use-case page** — design-for, not build-now.

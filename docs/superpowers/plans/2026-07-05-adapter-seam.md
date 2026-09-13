@@ -15,7 +15,7 @@
 - Test command: `uv run --extra dev pytest -q` (the `--extra dev` is required; plain `uv run pytest` fails). Baseline before Task 1: **71 passed**.
 - Run the full suite at the end of every task; it must be green before the commit step.
 - Python 3.12; all source under `src/garmin_gateway/`, all tests under `tests/`.
-- Commit messages end with: `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` (this repo commits as `vaclav@slajs.eu`, already configured).
+- Commit as `Charles <JustinMist@users.noreply.github.com>`.
 - The **Garmin password is never persisted or logged**; it must remain a local that is `del`-ed immediately after the login call (it moves into `GarminAdapter.start_login`, same discipline).
 - `account_key` (today `garmin_user_key`) = normalized **lowercased login email**. Normalization moves INTO the adapter (`LoginOk.account_key`) — `oauth._finish` stops normalizing. Exactly one place normalizes.
 - **Verify-then-persist:** `adapter.verify(blob)` gates `_finish` on every authorize path, called from `oauth.py` flow code (do NOT move it inside `_finish` or inside the adapter's login methods).
@@ -119,7 +119,7 @@ git commit -m "refactor(adapters): move garmin_login into adapters/garmin/login
 
 Pure move — first cut of the adapter seam (spec 2026-07-05, step 1).
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -269,7 +269,7 @@ Expected: 3 passed.
 git add src/garmin_gateway/adapters/base.py tests/test_adapters.py
 git commit -m "feat(adapters): contract types — Adapter/WorkerForward protocols, results, errors
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -368,7 +368,7 @@ Expected: 6 passed.
 git add src/garmin_gateway/adapters/garmin/__init__.py tests/test_adapters.py
 git commit -m "feat(adapters): GarminWorkerForward — worker command/env/token materialization
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -533,7 +533,7 @@ git commit -m "refactor(workers): parameterize WorkerManager by a WorkerForward 
 Manager keeps dirs/ports/locks/reaping; the forward owns command, env and
 credential materialization. Garmin specifics now live only in the adapter.
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -711,7 +711,7 @@ Expected: 14 passed.
 git add src/garmin_gateway/adapters/garmin/__init__.py tests/test_adapters.py
 git commit -m "feat(adapters): GarminAdapter — login/MFA/verify + error copy behind the protocol
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -953,7 +953,7 @@ git commit -m "refactor(oauth): drive the authorize flow through the Adapter pro
 oauth.py no longer knows Garmin: field names, error copy, MFA state shape and
 key normalization live in GarminAdapter. Log schema unchanged (health.py).
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -1057,7 +1057,7 @@ Expected: `87 passed` (86 after Task 6 + the registry test)
 git add src/garmin_gateway/adapters/__init__.py src/garmin_gateway/proxy.py src/garmin_gateway/app.py tests/test_proxy.py tests/test_adapters.py
 git commit -m "feat(adapters): registry + adapter threaded through proxy and app wiring
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -1104,7 +1104,7 @@ Expected: `87 passed`
 git add CLAUDE.md docs/superpowers/specs/2026-07-05-multi-adapter-gateway-design.md
 git commit -m "docs: adapter seam in CLAUDE.md module map + invariants; spec step 1 done
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---

@@ -351,13 +351,13 @@ Expected: FAIL — `"Your data, in Claude."` not found in the footer yet.
 Replace line 225:
 
 ```html
-      <div><span>MissingMCP &middot; The connectors Claude is missing.</span> <span>Built by <a href="https://slajs.eu">Vaclav Slajs</a>.</span></div>
+      <div><span>MissingMCP &middot; The connectors Claude is missing.</span> <span>Built by <a href="https://github.com/JustinMist">Charles</a>.</span></div>
 ```
 
 with:
 
 ```html
-      <div><span>MissingMCP &middot; Your data, in Claude.</span> <span>Built by <a href="https://slajs.eu">Vaclav Slajs</a>.</span></div>
+      <div><span>MissingMCP &middot; Your data, in Claude.</span> <span>Built by <a href="https://github.com/JustinMist">Charles</a>.</span></div>
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**

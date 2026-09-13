@@ -30,7 +30,7 @@
 - Worker registry: `app.py` builds a `WorkerManager` ONLY for worker-forward adapters — a local-forward adapter must get none.
 - The adapter registers only when BOTH `WHOOP_CLIENT_ID` and `WHOOP_CLIENT_SECRET` are set (pattern: `BACKUP_S3_*`).
 - Commit after every task; messages below. Append to each commit message:
-  `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` and
+  the configured Charles author identity and
   `Claude-Session: https://claude.ai/code/session_01JCXKgmPUyFqJAFVM76gY24`
 
 ---
@@ -1762,7 +1762,7 @@ and replace the returned route list so the login-shape decides which routes exis
       <h2 class="sec-h">Under the hood</h2>
       <div class="prose">
         <p>This connector is built into the gateway itself, on top of <a href="https://developer.whoop.com/">WHOOP&rsquo;s official developer API</a> (v2) &mdash; no reverse engineering, no password handling. Sign-in is WHOOP&rsquo;s own OAuth: the gateway receives read-only tokens, refreshes them automatically, and keeps them encrypted at rest.</p>
-        <p>Everything is open source in <a href="https://github.com/VelkyVenik/missingmcp">missingmcp</a> &mdash; audit it, or self-host the whole thing with your own WHOOP developer app.</p>
+        <p>Everything is open source in <a href="https://github.com/JustinMist/missingmcp">missingmcp</a> &mdash; audit it, or self-host the whole thing with your own WHOOP developer app.</p>
       </div>
     </div>
   </section>

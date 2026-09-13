@@ -305,12 +305,12 @@ def build_app(config: Config) -> Starlette:
         "Developer mode → create a custom connector with the MCP endpoint URL "
         f"above. Guide: {base}/garmin/chatgpt\n\n"
         "## Source\n"
-        "- Gateway: https://github.com/VelkyVenik/missingmcp\n"
+        "- Gateway: https://github.com/JustinMist/missingmcp\n"
         "- Garmin worker: https://github.com/Taxuspt/garmin_mcp\n")
     # Glama connector-directory ownership proof (glama.ai/mcp/connectors):
     # the email must match the operator's Glama account email.
     glama_json = ('{"$schema": "https://glama.ai/mcp/schemas/server.json",\n'
-                  ' "maintainers": ["vaclav@slajs.eu"]}\n')
+                  ' "maintainers": ["JustinMist@users.noreply.github.com"]}\n')
 
     # MCP server cards (SEP-2127): pre-connection discovery for scanners that
     # can't get past the OAuth wall (e.g. Smithery). "tools": "dynamic" defers

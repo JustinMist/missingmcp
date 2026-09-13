@@ -236,7 +236,7 @@ def test_wellknown_glama_json(tmp_path):
     r = _client(tmp_path).get("/.well-known/glama.json")
     assert r.status_code == 200 and "application/json" in r.headers["content-type"]
     assert r.json() == {"$schema": "https://glama.ai/mcp/schemas/server.json",
-                        "maintainers": ["vaclav@slajs.eu"]}
+                        "maintainers": ["JustinMist@users.noreply.github.com"]}
 
 
 def test_seo_head_meta(tmp_path):
@@ -321,7 +321,7 @@ def test_subpages_share_site_chrome(tmp_path):
         assert "Your data, in Claude." in r, path               # shared footer (umbrella promise)
         # author credit is fixed (who built MissingMCP); the operator — who runs
         # this instance — stays config-driven and appears separately
-        assert 'Built by <a href="https://slajs.eu">Vaclav Slajs</a>' in r, path
+        assert 'Built by <a href="https://github.com/JustinMist">Charles</a>' in r, path
         assert "This instance is run by" in r, path
 
 
@@ -544,7 +544,7 @@ def test_subscribe_rejects_oversized_body(tmp_path):
 def test_home_has_signup_modals_not_github_link(tmp_path):
     r = _client(tmp_path).get("/").text
     # the old GitHub-issues link in the card is gone (GitHub stays only in footer/security)
-    assert "github.com/VelkyVenik/missingmcp/issues/new" not in r
+    assert "github.com/JustinMist/missingmcp/issues/new" not in r
     # two buttons open the two modals
     assert 'data-modal="suggest"' in r
     assert 'data-modal="subscribe"' in r
@@ -559,7 +559,7 @@ def test_home_has_signup_modals_not_github_link(tmp_path):
 def test_github_still_reachable_in_footer(tmp_path):
     # removing the card link must not remove GitHub from the site entirely
     r = _client(tmp_path).get("/").text
-    assert 'href="https://github.com/VelkyVenik/missingmcp"' in r
+    assert 'href="https://github.com/JustinMist/missingmcp"' in r
 
 
 def test_site_js_has_modal_behavior(tmp_path):

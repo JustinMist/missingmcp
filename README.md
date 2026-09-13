@@ -416,7 +416,7 @@ If this gateway is useful to you, you can [buy me a beer 🍺](https://buymeacof
 
 ## License
 
-[MIT](LICENSE) © 2026 Vaclav Slajs
+[MIT](LICENSE) © 2026 Charles
 
 ## Acknowledgements
 

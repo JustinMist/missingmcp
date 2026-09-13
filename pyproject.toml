@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "MissingMCP — multi-user OAuth 2.1 gateway serving the connectors Claude is missing (Garmin via the unmodified garmin_mcp worker)"
 readme = "README.md"
 license = { file = "LICENSE" }
-authors = [{ name = "Vaclav Slajs", email = "vaclav@slajs.eu" }]
+authors = [{ name = "Charles", email = "JustinMist@users.noreply.github.com" }]
 keywords = ["mcp", "missingmcp", "garmin", "oauth", "claude", "garmin-connect"]
 requires-python = ">=3.12"
 dependencies = [
@@ -26,9 +26,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/VelkyVenik/missingmcp"
-Repository = "https://github.com/VelkyVenik/missingmcp"
-Issues = "https://github.com/VelkyVenik/missingmcp/issues"
+Homepage = "https://github.com/JustinMist/missingmcp"
+Repository = "https://github.com/JustinMist/missingmcp"
+Issues = "https://github.com/JustinMist/missingmcp/issues"
 
 [project.scripts]
 missingmcp = "missingmcp.app:main"

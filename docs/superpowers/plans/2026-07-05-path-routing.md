@@ -17,7 +17,7 @@
 - Test command: `uv run --extra dev pytest -q` (the `--extra dev` is REQUIRED). **Baseline before Task 1: 91 passed.** Run the full suite at the end of every task; green before each commit.
 - `garmin_user_key` is gone (Plan A1). `account_key`, `(adapter, account_key)`, and adapter-aware store CRUD are in place.
 - Python 3.12; source under `src/garmin_gateway/`, tests under `tests/`.
-- Commit messages end with `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` (repo commits as `vaclav@slajs.eu`).
+- Commit as `Charles <JustinMist@users.noreply.github.com>`.
 - **Out of scope (do NOT do here):** the MissingMCP rozcestník home page + `/garmin` subpage (Plan B — this plan only minimally fixes the landing's connect URL so it isn't wrong during the spike); revoke/status UX; Litestream backups; Rohlik / `RemoteForward`; per-adapter worker managers.
 
 ## File Structure
@@ -118,7 +118,7 @@ Expected: **92 passed** (91 + 1 net new: the protected-resource test; `test_meta
 git add src/garmin_gateway/oauth.py tests/test_oauth.py
 git commit -m "feat(oauth): adapter-scoped metadata + RFC 9728 protected-resource metadata
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -204,7 +204,7 @@ Run: `uv run --extra dev pytest -q` → **92 passed** (assertion added to an exi
 git add src/garmin_gateway/templates/authorize.html src/garmin_gateway/templates/mfa.html src/garmin_gateway/oauth.py tests/test_oauth.py
 git commit -m "feat(oauth): per-adapter form action so login/MFA POST to /<adapter>/oauth/authorize
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -381,7 +381,7 @@ Routes registered per adapter from the registry; RFC 8414 + RFC 9728 discovery
 docs carry the /garmin prefix; bare /mcp and /oauth/* removed. Landing connect
 URL updated to /garmin/mcp.
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -416,7 +416,7 @@ Expected: **93 passed**.
 git add CLAUDE.md docs/superpowers/specs/2026-07-05-garmin-finish-and-home-design.md
 git commit -m "docs: path-scoped connector routing in CLAUDE.md; spec Part 2 done
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -428,7 +428,7 @@ This is the go/no-go for the whole plan, mirroring the Garmin-login spike. Run i
 1. Redeploy staging (`railway up --detach` from the repo root); wait for `SUCCESS`.
 2. Confirm the new discovery docs serve on staging:
    `curl -s https://gateway-production-720e.up.railway.app/.well-known/oauth-protected-resource/garmin/mcp` → JSON with `resource` ending `/garmin/mcp`.
-3. **In a Claude client, add the connector fresh at `https://gateway-production-720e.up.railway.app/garmin/mcp`.** Confirm Claude's OAuth discovery resolves (DCR → authorize form), sign in with the Garmin account (re-login the migrated `vaclav@slajs.eu` — `upsert` overwrites its tokens), complete MFA, and run one tool call.
+3. **In a Claude client, add the connector fresh at `https://gateway-production-720e.up.railway.app/garmin/mcp`.** Confirm Claude's OAuth discovery resolves (DCR → authorize form), sign in with the Garmin account (re-login the migrated test account — `upsert` overwrites its tokens), complete MFA, and run one tool call.
 4. Watch the logs for the full chain: `register`, `login-start` → `login-start-result`, `authorize-finish`, `worker-spawn`/`worker-started`, `mcp-request adapter="garmin"`.
 
 **If discovery fails** (Claude can't find the auth server from the path-scoped well-known): the fallback is a root `/.well-known/oauth-authorization-server` (and/or `/.well-known/oauth-protected-resource`) that points at the garmin issuer — designed and added only if the spike shows it's needed. Do not build it preemptively.

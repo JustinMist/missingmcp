@@ -16,7 +16,7 @@
 - Test command: `uv run --extra dev pytest -q` (the `--extra dev` is REQUIRED; plain `uv run pytest` fails). **Baseline before Task 1: 87 passed.** Run the full suite at the end of every task; it must be green before the commit step.
 - SQLite specifics that must hold: `ALTER TABLE ... ADD COLUMN <x> NOT NULL DEFAULT 'garmin'` (the DEFAULT is required to satisfy NOT NULL on existing rows and is harmless afterward — the code always supplies `adapter` explicitly); `ALTER TABLE ... RENAME COLUMN` (SQLite ≥3.25, bundled with Python 3.12); `tool_usage` PK changes to `(adapter, account_key, tool)` so it is **rebuilt** (create-new → copy → drop → rename), not altered in place.
 - Python 3.12; source under `src/garmin_gateway/`, tests under `tests/`.
-- Commit messages end with: `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>` (repo commits as `vaclav@slajs.eu`).
+- Commit as `Charles <JustinMist@users.noreply.github.com>`.
 - **Out of scope (do NOT do here):** path routing / `/garmin/mcp` / `.well-known` changes (Plan A2); adapter-isolation enforcement beyond what Task 2 specifies; Rohlik; worker-registry composite keying (the worker key stays `account_key` — a second adapter will revisit it); package rename.
 
 ## File Structure
@@ -669,7 +669,7 @@ account_key. One idempotent PRAGMA-user_version migration; ciphertext verbatim.
 oauth/proxy thread the adapter into every store call; token-issued log field
 renamed. Behavior otherwise identical (89 passed).
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -796,7 +796,7 @@ account_key_for_token_hash now returns (adapter, account_key); authenticate
 compares it to the request's adapter. No-op for Garmin-only today, but the
 schema's purpose and the isolation guarantee for a second adapter.
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -890,7 +890,7 @@ Expected: **90 passed**.
 git add scripts/status.py scripts/revoke.py scripts/usage.py
 git commit -m "fix(scripts): follow the accounts/account_key rename so status/revoke/usage keep working
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -927,7 +927,7 @@ Expected: **90 passed**.
 git add CLAUDE.md
 git commit -m "docs: adapter-keyed store in CLAUDE.md module map + invariants
 
-Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
+"
 ```
 
 ---
@@ -941,7 +941,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ## Verification at the end
 
 1. `uv run --extra dev pytest -q` → **90 passed**.
-2. Migration sanity on the real staging DB (the rehearsal for prod): after deploying this plan to staging, confirm the one spike-test account survived — `railway ssh --service gateway "python3 scripts/status.py"` lists `garmin / vaclav@slajs.eu` and the connector still works (a tool call succeeds). This is the migration's real-world gate; the URL is unchanged in this plan, so the existing staging connector keeps working.
+2. Migration sanity on the real staging DB (the rehearsal for prod): after deploying this plan to staging, confirm the one spike-test account survived — `railway ssh --service gateway "python3 scripts/status.py"` lists the expected Garmin test account and the connector still works (a tool call succeeds). This is the migration's real-world gate; the URL is unchanged in this plan, so the existing staging connector keeps working.
 3. `git log --oneline` shows 4 commits, each with a green suite behind it.
 
 ## Self-review notes (author)

@@ -21,7 +21,7 @@ pytest via `uv run --extra dev pytest`.
 - **`/garmin` page content stays verbatim** — the current `landing.html` already contains the required "built on garmin_mcp" credit; no copy changes there.
 - **CSP is `default-src 'self'; style-src 'self' 'unsafe-inline'`** (`security.py`): no external fonts/images/scripts, no inline JS. Inline `<style>` only.
 - **Placeholders:** templates may use `{PUBLIC_URL}`, `{OPERATOR_NAME}`, `{OPERATOR_EMAIL}` — replaced once in `build_app` (existing pattern).
-- **Open question resolved (both repos verified public):** `Suggest a connector` → `https://github.com/VelkyVenik/missingmcp/issues/new`; footer `Source on GitHub` → `https://github.com/VelkyVenik/missingmcp`.
+- **Open question resolved (both repos verified public):** `Suggest a connector` → `https://github.com/JustinMist/missingmcp/issues/new`; footer `Source on GitHub` → `https://github.com/JustinMist/missingmcp`.
 - **MCP server URL stays `{PUBLIC_URL}/mcp`** on the Garmin page — path-scoped routing (`/garmin/mcp`) is a separate work item (spec step 3), not this plan.
 - Tests: `uv run --extra dev pytest -q` must be green at the end of every task.
 
@@ -244,7 +244,7 @@ Full file content (copy is verbatim from the messaging spec):
         <a href="#connectors">Connectors</a>
         <a href="#how">How it works</a>
         <a href="#security">Security</a>
-        <a href="https://github.com/VelkyVenik/missingmcp">GitHub</a>
+        <a href="https://github.com/JustinMist/missingmcp">GitHub</a>
       </nav>
     </div>
   </header>
@@ -279,7 +279,7 @@ Full file content (copy is verbatim from the messaging spec):
         <div class="card">
           <h3>Missing something?</h3>
           <p>Every connector here started as &ldquo;I wish Claude could&hellip;&rdquo;. Tell me which app should be next.</p>
-          <a class="go" href="https://github.com/VelkyVenik/missingmcp/issues/new">Suggest a connector &rarr;</a>
+          <a class="go" href="https://github.com/JustinMist/missingmcp/issues/new">Suggest a connector &rarr;</a>
         </div>
       </div>
     </div>
@@ -332,7 +332,7 @@ Full file content (copy is verbatim from the messaging spec):
         </div>
         <div>
           <h3>Open source, run by a person</h3>
-          <p>This instance is run by {OPERATOR_NAME}. The full source is <a href="https://github.com/VelkyVenik/missingmcp">on GitHub</a> &mdash; audit it, or run your own.</p>
+          <p>This instance is run by {OPERATOR_NAME}. The full source is <a href="https://github.com/JustinMist/missingmcp">on GitHub</a> &mdash; audit it, or run your own.</p>
         </div>
       </div>
     </div>
@@ -352,7 +352,7 @@ Full file content (copy is verbatim from the messaging spec):
   <footer>
     <div class="wrap">
       <div>MissingMCP &middot; The connectors Claude is missing.</div>
-      <div><a href="https://github.com/VelkyVenik/missingmcp">Source on GitHub</a> &middot; Run by {OPERATOR_NAME}</div>
+      <div><a href="https://github.com/JustinMist/missingmcp">Source on GitHub</a> &middot; Run by {OPERATOR_NAME}</div>
     </div>
   </footer>
 </body>
