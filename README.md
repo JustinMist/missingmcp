@@ -33,14 +33,19 @@ their Garmin credentials, and never touch a terminal or a token file.
 
 - **OAuth 2.1** — Authorization Code + PKCE (S256) with Dynamic Client
   Registration. Connect from any Claude client; no manual token wrangling.
-- **Garmin password is never stored** — used once to sign in (MFA supported);
-  only the resulting session tokens are persisted.
+- **Garmin password is never stored** — used once to sign in (MFA supported),
+  then removed from both the client and nested MFA request state; only the
+  verified session tokens are persisted.
 - **Encrypted at rest** — tokens sealed with AES-256-GCM; the DB is useless without
   `GATEWAY_SECRET`. Bearer tokens are stored only as SHA-256 hashes.
 - **Per-user isolation** — each account gets its own `garmin_mcp` worker bound to
-  `127.0.0.1`, started on demand and reaped when idle.
+  `127.0.0.1`, started on demand and reaped when idle. Garmin workers cannot
+  inherit deployment-level email/password/file/base64 fallback credentials;
+  stale account tokens fail closed and require that account to sign in again.
 - **Hardened** — one-time 10-min auth codes, CSRF on forms, per-IP/-token rate
-  limits, the `garmin_mcp` worker pinned to a reviewed commit.
+  limits, the `garmin_mcp` worker pinned to a reviewed commit and
+  `garminconnect` pinned to its reviewed `0.3.6` authentication contract; this
+  includes region-aware CN DI refresh routing and private token-file writes.
 - **Off-box backups** — periodic encrypted SQLite snapshots to an S3-compatible
   bucket (see [Backups](#backups)).
 - **Instructional landing page** served on `/` and as a friendly fallback for
@@ -95,11 +100,15 @@ the available connectors.
 
 ### Garmin — `/garmin/mcp`
 
-Sign in with your Garmin Connect email + password (MFA supported). The password
-is used once for the Garmin login and discarded; only the resulting Garmin
-session tokens are stored (AES-256-GCM encrypted). Each account gets its own
-`garmin_mcp` worker process, bound to `127.0.0.1`, started on demand and reaped
-when idle.
+Choose China (`garmin.cn`) or Global (`garmin.com`), then sign in with your
+Garmin Connect email + password (MFA supported). The region belongs to the
+account and survives MFA, error-page retries and token refresh; MFA restarts
+restore it from server state, not client input. The password is used once and
+discarded. Only a versioned region + session-token blob is stored
+(AES-256-GCM encrypted). Each regional account gets its own `garmin_mcp` worker
+process, bound to `127.0.0.1`, started on demand and reaped when idle. If token
+verification itself refreshes the session, that verified generation is the one
+stored.
 
 ### WHOOP — `/whoop/mcp`
 
@@ -224,6 +233,8 @@ python scripts/status.py --detail # + per-account devices (token prefixes),
 python scripts/revoke.py --list                       # accounts + token counts
 python scripts/revoke.py --account [<adapter>:]<key>  # kill-switch: revoke ALL the
                                                       #   account's tokens (bare key = garmin)
+# Garmin regional keys: garmin:cn:<email> or garmin:global:<email>;
+# pre-region Global accounts may still appear as garmin:<email>.
 python scripts/revoke.py --account <key> --purge      # + delete stored account & usage
 python scripts/revoke.py --device <hash-prefix>       # revoke ONE device (prefix from status.py)
 python scripts/usage.py                               # per-account tool usage + leaderboard
@@ -351,9 +362,9 @@ not an env var, by design.
 ## How it works
 
 1. Claude registers a client (DCR) and starts OAuth 2.1 (Authorization Code + PKCE).
-2. On the authorize page the user signs in with Garmin (email + password, + MFA if
-   prompted). The gateway logs in via `garminconnect`, stores **only the resulting
-   tokens** (encrypted), and discards the password.
+2. On the authorize page the user chooses the Garmin region and signs in (email
+   + password, + MFA if prompted). The gateway logs in via `garminconnect`, stores
+   **only the region and post-verification tokens** (encrypted), and discards the password.
 3. Claude exchanges the code for a Bearer token.
 4. On each `/garmin/mcp` call the gateway ensures the user's `garmin_mcp` worker is running
    (its own tokens, bound to `127.0.0.1`) and reverse-proxies to it.
@@ -386,15 +397,18 @@ gateway refreshes the account's rotating WHOOP tokens itself as needed.
 
 - **Set a real random `GATEWAY_SECRET`** (`openssl rand -base64 48`) — the app
   refuses to start with the placeholder from `.env.example`.
-- **Pin `GARMIN_MCP_REF` to a reviewed commit SHA** — `main` is a floating ref that
-  can change without notice (supply-chain).
+- **Keep both dependency pins reviewed** — `GARMIN_MCP_REF` must remain a commit
+  SHA, and `garminconnect` must match the exact version in `pyproject.toml` /
+  `uv.lock` and the dependency-contract tests.
 - **Revoking access** — access tokens expire after `ACCESS_TOKEN_TTL_DAYS` (default
   90; the user just re-authenticates in Claude). To revoke sooner — a leaked token
-  or a removed user — run `python scripts/revoke.py --account [<adapter>:]<email>` (kill-switch
-  for all of that account's tokens). A single device can be revoked with `--device <hash-prefix>` (prefixes are shown by `status.py`).
-- **Run a manual end-to-end smoke test** with a real Garmin account (including the
-  MFA path) before connecting real users — the upstream is mocked in the
-  automated tests.
+  or a removed user — first use `python scripts/revoke.py --list`, then pass its full
+  identity to `--account` (for example `garmin:cn:<email>`). A single device can be
+  revoked with `--device <hash-prefix>` (prefixes are shown by `status.py`).
+- **Run manual end-to-end smoke tests** with real Garmin China (including MFA)
+  and Global accounts before connecting real users — dependency internals are
+  contract-tested, but live Garmin is mocked. Include worker restart/reconnect
+  and token refresh.
 
 ## Support
 

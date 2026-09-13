@@ -85,3 +85,76 @@ def test_worker_pump_emits_structured_lines_with_severity(capsys):
     assert events[0]["level"] == "info"
     assert events[1]["level"] == "error"      # ERROR heuristic elevates severity
     assert events[2]["level"] == "info"
+
+
+def test_third_party_password_and_tokens_are_redacted(capsys):
+    lines = io.StringIO(
+        'password=hunter2 access_token="access-secret" '
+        'di_refresh_token: refresh-secret Authorization: Bearer bearer-secret\n'
+    )
+    _pump_worker_output(lines, "me@x.cz")
+    event = _capture(capsys)[0]
+    rendered = json.dumps(event)
+    assert "hunter2" not in rendered
+    assert "access-secret" not in rendered
+    assert "refresh-secret" not in rendered
+    assert "bearer-secret" not in rendered
+    assert rendered.count("[REDACTED]") == 4
+
+
+def test_quoted_and_structured_secrets_are_redacted_everywhere(
+        tmp_path, capsys):
+    logfile = tmp_path / "secrets.log"
+    sink_records = []
+    secrets = [
+        "json-password-secret", "dict-refresh-secret",
+        "structured-client-secret", "structured-mfa-secret",
+        "trace-password-secret", "escaped-quote-secret-suffix",
+        "basic-authorization-secret", "digest-authorization-secret",
+        "digest-response-secret", "trace-digest-response-secret",
+    ]
+    try:
+        mlog.setup_logging(path=str(logfile))
+        mlog.set_sink(sink_records.append)
+        escaped = json.dumps({
+            "password": 'prefix"escaped-quote-secret-suffix',
+            "safe": "ok",
+        })
+        _pump_worker_output(io.StringIO(
+            '{"password":"json-password-secret", '
+            "'di_refresh_token': 'dict-refresh-secret', \"safe\":\"ok\"}\n"
+            + escaped + "\n"
+            + "Authorization: Basic basic-authorization-secret\n"
+            + "Authorization=Digest digest-authorization-secret\n"
+            + ('Authorization: Digest username="u", realm="r", nonce="n", '
+               'response="digest-response-secret"\n')
+        ), "me@x.cz")
+        mlog.log("structured-secret-fields",
+                 client_secret="structured-client-secret",
+                 mfa_code="structured-mfa-secret", safe="still-visible")
+        try:
+            raise RuntimeError(
+                '{"password":"trace-password-secret"}\n'
+                'Authorization: Digest username="u", realm="r", nonce="n", '
+                'response="trace-digest-response-secret"')
+        except RuntimeError:
+            logging.getLogger("secret-traceback").exception("upstream failed")
+    finally:
+        mlog.set_sink(None)
+        root = logging.getLogger()
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+            handler.close()
+        if mlog._file is not None:
+            mlog._file.close()
+            mlog._file = None
+
+    outputs = [
+        capsys.readouterr().out,
+        logfile.read_text(encoding="utf-8"),
+        json.dumps(sink_records),
+    ]
+    for output in outputs:
+        assert all(secret not in output for secret in secrets)
+        assert "[REDACTED]" in output
+        assert "still-visible" in output

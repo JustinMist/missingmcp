@@ -1,0 +1,32 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv
+      - run: uv lock --check
+      - run: uv sync --frozen --extra dev
+      - run: git clone https://github.com/Taxuspt/garmin_mcp "$RUNNER_TEMP/garmin-mcp"
+      - run: git -C "$RUNNER_TEMP/garmin-mcp" checkout --detach e8554bcd761a4494dc12a98461224bb3dcf1fbc5
+      - run: uv lock --check --project "$RUNNER_TEMP/garmin-mcp"
+      - run: uv sync --project "$RUNNER_TEMP/garmin-mcp" --frozen --no-dev
+      - run: uv pip install --python "$RUNNER_TEMP/garmin-mcp/.venv/bin/python" --no-deps --reinstall --require-hashes -r garmin-worker-override.txt
+      - name: Verify gateway and worker Garmin dependency
+        run: |
+          uv run --no-sync python -c "from importlib.metadata import version; assert version('garminconnect') == '0.3.6'"
+          "$RUNNER_TEMP/garmin-mcp/.venv/bin/python" -c "from importlib.metadata import version; assert version('garminconnect') == '0.3.6'"
+      - run: uv run --no-sync pytest -q

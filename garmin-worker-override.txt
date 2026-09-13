@@ -1,0 +1,7 @@
+# The pinned garmin_mcp commit's historical lock resolves 0.3.2, whose CN DI
+# endpoint is incorrect. Keep the worker source ref fixed, but replace only
+# this pure-Python dependency with the same reviewed version as the gateway.
+# Hashes are the PyPI sdist and universal wheel recorded in this repo's uv.lock.
+garminconnect==0.3.6 \
+    --hash=sha256:6f90aa282976f7dff880cf53ef4f3ea0d63701fd2a1488c628a66a2a027c2143 \
+    --hash=sha256:e05782ab90e63cb9c023407899e2d12dd18132316fd84394ebecd393809d4ffe

@@ -51,6 +51,11 @@ class _FakeHttpServer:
 class FakeWorker(_FakeHttpServer):
     """A minimal HTTP server mimicking garmin-mcp's /healthz and /mcp."""
 
+    def __init__(self, response_json=None, session_id="sess-1"):
+        self.response_json = response_json or '{"jsonrpc":"2.0","result":{}}'
+        self.session_id = session_id
+        super().__init__()
+
     def _handler(self) -> type:
         worker = self
 
@@ -70,9 +75,9 @@ class FakeWorker(_FakeHttpServer):
                 worker.calls.append(("POST", self.path, dict(self.headers), body))
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Mcp-Session-Id", "sess-1")
+                self.send_header("Mcp-Session-Id", worker.session_id)
                 self.end_headers()
-                self.wfile.write(b'{"jsonrpc":"2.0","result":{}}')
+                self.wfile.write(worker.response_json.encode())
 
         return H
 

@@ -4,6 +4,7 @@
 Usage:
   python scripts/revoke.py --list                      # accounts + token counts
   python scripts/revoke.py --account me@x.cz           # ALL garmin tokens for an account
+  python scripts/revoke.py --account garmin:cn:me@x.cz # regional Garmin account
   python scripts/revoke.py --account rohlik:me@x.cz    # adapter-scoped
   python scripts/revoke.py --account me@x.cz --purge   # + delete stored account & usage
   python scripts/revoke.py --device ab12cd34           # one device, by token-hash prefix
@@ -59,7 +60,7 @@ def resolve_db() -> str:
 
 
 def parse_account(value: str) -> tuple[str, str]:
-    """'rohlik:me@x.cz' -> ('rohlik', 'me@x.cz'); a bare key defaults to garmin.
+    """'garmin:cn:me@x.cz' -> ('garmin', 'cn:me@x.cz'); bare defaults to Garmin.
     Keys are stored lowercased (oauth._finish), so normalize here too."""
     adapter, sep, key = value.partition(":")
     if not sep:

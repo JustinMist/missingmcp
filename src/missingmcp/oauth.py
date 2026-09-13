@@ -7,8 +7,16 @@ import time
 from urllib.parse import urlencode
 from starlette.responses import JSONResponse, HTMLResponse, RedirectResponse
 from . import pages, store, security, telemetry
-from .adapters.base import LoginError, SecondFactorError, SecondFactorNeeded, is_upstream_oauth
+from .adapters.base import (LoginError, SecondFactorError, SecondFactorNeeded,
+                            Verification, is_upstream_oauth)
 from .log import log, log_warn, log_error, log_exc
+
+
+def _verification_values(candidate_blob: str, verification) -> tuple[str, str]:
+    """Normalize the backward-compatible adapter verification result."""
+    if isinstance(verification, Verification):
+        return verification.name, verification.blob
+    return verification, candidate_blob
 
 
 def _login_failed(adapter, reason: str) -> None:
@@ -120,6 +128,23 @@ class AuthState:
             return None
         return pending, params
 
+    def peek_mfa(self, login_id: str, adapter_name: str):
+        """Read server-owned restart context without consuming the MFA state.
+
+        This is used only when the submitted CSRF token is stale: client form
+        fields are not authoritative for account region, but the pending MFA
+        state still is. Cross-adapter ids remain indistinguishable from missing
+        ids and never expose their context.
+        """
+        self._gc()
+        item = self._mfa.get(login_id)
+        if item is None:
+            return None
+        pending, params, owner, _ts = item
+        if owner != adapter_name:
+            return None
+        return pending, params
+
     def _gc(self) -> None:
         now = time.monotonic()
         for k, (_p, _q, _a, ts) in list(self._mfa.items()):
@@ -157,9 +182,18 @@ def _oauth_hidden_fields(params: dict, csrf_token: str) -> str:
     )
 
 
-def render_authorize(params: dict, csrf_token: str, config, adapter, error: str = "") -> HTMLResponse:
+def _valid_form_region(source) -> str:
+    value = source.get("garmin_region", "global")
+    return value if value in ("cn", "global") else "global"
+
+
+def render_authorize(params: dict, csrf_token: str, config, adapter, error: str = "",
+                     region: str = "global") -> HTMLResponse:
+    region = region if region in ("cn", "global") else "global"
     body = _fill(_authorize_page(adapter, config), {
         "AUTHORIZE_ACTION": f"/{adapter.name}/oauth/authorize",
+        "CN_CHECKED": " checked" if region == "cn" else "",
+        "GLOBAL_CHECKED": " checked" if region == "global" else "",
         **_operator_fields(config),
     }, error)
     # after _fill: the fragment is HTML (must not be escaped) and its escaped
@@ -290,9 +324,17 @@ async def authorize_post(request, adapter, state, conn, config) -> HTMLResponse 
         # while people hunt for credentials, and a double-submit burns it.
         # Re-render the sign-in form with a fresh token instead (the hidden
         # OAuth params round-trip through the form; values are html-escaped).
-        return render_authorize(_oauth_params_from(form), state.csrf.issue(),
-                                config, adapter,
-                                error="Your session expired. Please sign in again.")
+        restart_params = _oauth_params_from(form)
+        restart_region = _valid_form_region(form)
+        if has_login_id:
+            saved = state.peek_mfa(form.get("login_id", ""), adapter.name)
+            if saved is not None:
+                _pending, restart_params = saved
+                restart_region = restart_params.get(
+                    "_authorize_region", "global")
+        return render_authorize(restart_params, state.csrf.issue(), config, adapter,
+                                error="Your session expired. Please sign in again.",
+                                region=restart_region)
 
     # second-factor step (Garmin: MFA)
     if has_login_id:
@@ -314,7 +356,8 @@ async def authorize_post(request, adapter, state, conn, config) -> HTMLResponse 
                      timeout=config.login_timeout)
             _login_failed(adapter, "timeout")
             return render_authorize(params, state.csrf.issue(), config, adapter,
-                                    _timeout_message(adapter))
+                                    _timeout_message(adapter),
+                                    region=params.get("_authorize_region", "global"))
         except SecondFactorError as e:  # wrong/expired code: re-prompt
             log_exc("mfa-resume-failed", e, error_type=type(e).__name__, error=str(e))
             _login_failed(adapter, "mfa_invalid")
@@ -328,25 +371,31 @@ async def authorize_post(request, adapter, state, conn, config) -> HTMLResponse 
         except LoginError as e:  # contract: "start over" — back to the credential form
             log_exc("mfa-resume-fatal", e, error=str(e))
             _login_failed(adapter, "mfa_fatal")
-            return render_authorize(params, state.csrf.issue(), config, adapter, str(e))
+            return render_authorize(
+                params, state.csrf.issue(), config, adapter, str(e),
+                region=params.get("_authorize_region", "global"))
         try:
             t0 = time.monotonic()
-            name = await _bounded(config, adapter.verify, result.blob)
+            verification = await _bounded(config, adapter.verify, result.blob)
+            name, verified_blob = _verification_values(result.blob, verification)
             log("mfa-verify-ok", name=name, ms=int((time.monotonic() - t0) * 1000))
         except TimeoutError:  # verification hung: start over
             log_warn("mfa-verify-timeout", ms=int((time.monotonic() - t0) * 1000),
                      timeout=config.login_timeout)
             _login_failed(adapter, "timeout")
             return render_authorize(params, state.csrf.issue(), config, adapter,
-                                    _timeout_message(adapter))
+                                    _timeout_message(adapter),
+                                    region=params.get("_authorize_region", "global"))
         except LoginError as e:  # blob didn't authenticate: start over
             log_exc("mfa-verify-failed", e, error=str(e))
             _login_failed(adapter, "verify_failed")
-            return render_authorize(params, state.csrf.issue(), config, adapter, str(e))
+            return render_authorize(
+                params, state.csrf.issue(), config, adapter, str(e),
+                region=params.get("_authorize_region", "global"))
         log("authorize-finish", step="mfa")
         telemetry.capture("login_succeeded", distinct_id=result.account_key,
                           properties={"adapter": adapter.name, "step": "mfa"})
-        return _finish(conn, config, params, result.blob, adapter.name, result.account_key,
+        return _finish(conn, config, params, verified_blob, adapter.name, result.account_key,
                        request=request)
 
     # login step
@@ -366,18 +415,22 @@ async def authorize_post(request, adapter, state, conn, config) -> HTMLResponse 
                  timeout=config.login_timeout)
         _login_failed(adapter, "timeout")
         return render_authorize(params, state.csrf.issue(), config, adapter,
-                                _timeout_message(adapter))
+                                _timeout_message(adapter),
+                                region=_valid_form_region(form))
     except LoginError as e:
         log_exc("login-start-failed", e, reason=e.reason, error=str(e))
         _login_failed(adapter, e.reason)
-        return render_authorize(params, state.csrf.issue(), config, adapter, str(e))
+        return render_authorize(params, state.csrf.issue(), config, adapter, str(e),
+                                region=_valid_form_region(form))
     except Exception as e:  # noqa: BLE001 - unexpected failure
         log_exc("login-start-failed", e, reason="unknown", error_type=type(e).__name__, error=str(e))
         _login_failed(adapter, "unknown")
         return render_authorize(params, state.csrf.issue(), config, adapter,
-                                f"{adapter.display_name} sign-in failed, please try again.")
+                                f"{adapter.display_name} sign-in failed, please try again.",
+                                region=_valid_form_region(form))
     if isinstance(result, SecondFactorNeeded):
         telemetry.capture("mfa_challenged", properties={"adapter": adapter.name})
+        params["_authorize_region"] = _valid_form_region(form)
         lid = state.put_mfa(result.state, params, adapter.name)
         body = _fill(_second_factor_page(adapter, config),
                      {"CSRF": state.csrf.issue(), "LOGIN_ID": lid,
@@ -386,22 +439,25 @@ async def authorize_post(request, adapter, state, conn, config) -> HTMLResponse 
         return HTMLResponse(body)
     try:
         t0 = time.monotonic()
-        name = await _bounded(config, adapter.verify, result.blob)
+        verification = await _bounded(config, adapter.verify, result.blob)
+        name, verified_blob = _verification_values(result.blob, verification)
         log("login-verify-ok", name=name, ms=int((time.monotonic() - t0) * 1000))
     except TimeoutError:  # verification hung: let the user retry fast
         log_warn("login-verify-timeout", ms=int((time.monotonic() - t0) * 1000),
                  timeout=config.login_timeout)
         _login_failed(adapter, "timeout")
         return render_authorize(params, state.csrf.issue(), config, adapter,
-                                _timeout_message(adapter))
+                                _timeout_message(adapter),
+                                region=_valid_form_region(form))
     except LoginError as e:
         log_exc("login-verify-failed", e, error=str(e))
         _login_failed(adapter, "verify_failed")
-        return render_authorize(params, state.csrf.issue(), config, adapter, str(e))
+        return render_authorize(params, state.csrf.issue(), config, adapter, str(e),
+                                region=_valid_form_region(form))
     log("authorize-finish", step="login")
     telemetry.capture("login_succeeded", distinct_id=result.account_key,
                       properties={"adapter": adapter.name, "step": "login"})
-    return _finish(conn, config, params, result.blob, adapter.name, result.account_key,
+    return _finish(conn, config, params, verified_blob, adapter.name, result.account_key,
                    request=request)
 
 
@@ -478,7 +534,8 @@ async def authorize_callback(request, adapter, state, conn, config) -> HTMLRespo
         # httpx.get) — bound it off the loop exactly like the login/MFA paths,
         # so a rate-limiting provider can't freeze the single-node event loop.
         t0 = time.monotonic()
-        name = await _bounded(config, adapter.verify, result.blob)
+        verification = await _bounded(config, adapter.verify, result.blob)
+        name, verified_blob = _verification_values(result.blob, verification)
         log("upstream-verify-ok", name=name, ms=int((time.monotonic() - t0) * 1000))
     except TimeoutError:  # verify hung (rate-limited provider): send the user back to retry
         log_warn("upstream-verify-timeout", adapter=adapter.name, timeout=config.login_timeout)
@@ -499,5 +556,5 @@ async def authorize_callback(request, adapter, state, conn, config) -> HTMLRespo
     log("authorize-finish", step="upstream")
     telemetry.capture("login_succeeded", distinct_id=result.account_key,
                       properties={"adapter": adapter.name, "step": "upstream"})
-    return _finish(conn, config, params, result.blob, adapter.name, result.account_key,
+    return _finish(conn, config, params, verified_blob, adapter.name, result.account_key,
                    request=request)

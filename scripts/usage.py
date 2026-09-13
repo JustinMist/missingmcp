@@ -10,6 +10,7 @@ Usage:
   python scripts/usage.py                          # per-account summary + top tools
   python scripts/usage.py --tools                  # overall tool/method leaderboard
   python scripts/usage.py --account me@x           # one garmin account's breakdown
+  python scripts/usage.py --account garmin:cn:me@x # regional garmin account
   python scripts/usage.py --account rohlik:me@x    # adapter-scoped
 
 DB path resolves like status.py: $DB_PATH, $DATA_DIR/gateway.db, /data, ./.localdata.
@@ -37,7 +38,7 @@ def resolve_db() -> str:
 
 
 def parse_account(value: str) -> tuple[str, str]:
-    """'rohlik:me@x.cz' -> ('rohlik', 'me@x.cz'); a bare key defaults to garmin.
+    """'garmin:cn:me@x.cz' -> ('garmin', 'cn:me@x.cz'); bare defaults to Garmin.
     Keys are stored lowercased (oauth._finish), so normalize here too."""
     adapter, sep, key = value.partition(":")
     if not sep:

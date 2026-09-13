@@ -31,16 +31,31 @@ class SecondFactorError(Exception):
 
 
 def normalize_account_key(email: str) -> str:
-    """Owns the spec invariant "account_key = normalized lowercased login email"
-    — the cross-table join key and worker-registry key. Every adapter's
-    LoginOk.account_key must come from here."""
+    """Normalize the email component of an adapter-owned account identity.
+
+    Garmin prefixes this value with its region for new accounts; other
+    adapters may use it directly. ``LoginOk.account_key`` remains the complete
+    cross-table and worker-registry key.
+    """
     return email.strip().lower()
 
 
 @dataclass(frozen=True)
 class LoginOk:
-    account_key: str   # normalized (lowercased) login identity — cross-table join key
+    account_key: str   # adapter-owned normalized identity — cross-table join key
     blob: str          # adapter-defined serialized credentials; store encrypts at rest
+
+
+@dataclass(frozen=True)
+class Verification:
+    """Successful verification, optionally replacing the candidate generation.
+
+    Some upstreams rotate credentials while authenticating them. The OAuth
+    core must persist this verified blob rather than the pre-verification one.
+    Adapters that cannot rotate may retain the legacy ``str`` return value.
+    """
+    name: str
+    blob: str
 
 
 @dataclass(frozen=True)
@@ -76,6 +91,12 @@ class WorkerForward(Protocol):
         rule, worker-strategy edition); a worker whose upstream never rotates
         can simply return None."""
         ...
+
+    # Implementations may additionally provide the OPTIONAL hook
+    # ``prepare_read_back(blob, workdir)``. The manager calls it with the
+    # authoritative baseline immediately before reading a stopped worker's
+    # files. This lets sidecar-based adapters restore validation context after
+    # a gateway restart without materializing over a newer worker generation.
 
 
 class RemoteForward(Protocol):
@@ -150,7 +171,11 @@ class Adapter(Protocol):
         or LoginError (start over)."""
         ...
 
-    def verify(self, blob: str) -> str:
-        """Confirm the blob authenticates against the upstream; return a display
-        name for logging. Raises LoginError. Gates persistence on every path."""
+    def verify(self, blob: str) -> str | Verification:
+        """Confirm the blob authenticates against the upstream.
+
+        Return a display name, or ``Verification(name, verified_blob)`` when
+        verification can rotate credentials. Raises LoginError and gates
+        persistence on every path.
+        """
         ...

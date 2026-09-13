@@ -1,10 +1,12 @@
 from __future__ import annotations
-import json
 import os
-from typing import Mapping
+import tempfile
+from typing import Callable, Mapping
 from ..base import (LoginError, LoginOk, SecondFactorError, SecondFactorNeeded,
-                    normalize_account_key)
+                    Verification, normalize_account_key)
 from . import login
+from .blob import (GarminBlobError, REGION_CN, REGION_GLOBAL, pack_blob,
+                   unpack_blob, validate_region, normalize_tokens_json)
 
 
 # The worker's two possible sign-in verdicts, printed exactly once per worker
@@ -17,6 +19,13 @@ _LOGIN_FAILED_LINES = (
     "Garmin Connect client failed to initialize",       # >= e8554bc (background login)
     "Failed to initialize Garmin Connect client",       # older pins (exit-on-failure era)
 )
+_FALLBACK_CREDENTIAL_ENV = frozenset({
+    "GARMIN_EMAIL",
+    "GARMIN_PASSWORD",
+    "GARMIN_EMAIL_FILE",
+    "GARMIN_PASSWORD_FILE",
+    "GARMINTOKENS_BASE64",
+})
 
 
 class GarminWorkerForward:
@@ -25,6 +34,10 @@ class GarminWorkerForward:
 
     def __init__(self, config):
         self._cfg = config
+        # Per-workdir authority established by materialize(). A missing marker
+        # defaults to Global only for an unknown legacy workdir; it can never
+        # downgrade a known CN workdir after materialization.
+        self._expected_regions: dict[str, str] = {}
 
     def login_outcome(self, line: str) -> str | None:
         """Classify one worker log line as the sign-in outcome — "ok", "failed",
@@ -41,19 +54,80 @@ class GarminWorkerForward:
     def command(self) -> list[str]:
         return self._cfg.garmin_mcp_cmd
 
+    @staticmethod
+    def sanitize_env(env: Mapping[str, str]) -> dict[str, str]:
+        """Remove worker fallback credentials inherited from the gateway.
+
+        A worker is authorized only by its account-specific token directory.
+        If those tokens are stale, the pinned worker must fail instead of
+        logging in with a deployment-level email/password from another user.
+        """
+        return {key: value for key, value in env.items()
+                if key not in _FALLBACK_CREDENTIAL_ENV}
+
     def env(self, port: int, workdir: str) -> dict[str, str]:
+        region = self._read_region(workdir)
         return {
             "GARMIN_MCP_TRANSPORT": "streamable-http",
             "GARMIN_MCP_HOST": "127.0.0.1",
             "GARMIN_MCP_PORT": str(port),
             "GARMINTOKENS": workdir,
+            "GARMIN_IS_CN": "true" if region == REGION_CN else "false",
         }
 
     def materialize(self, blob: str, workdir: str) -> None:
-        path = os.path.join(workdir, "garmin_tokens.json")
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(blob)
+        region, tokens_json = unpack_blob(blob)
+        workdir = os.path.realpath(workdir)
+        self._expected_regions[workdir] = region
+        self._write_private(os.path.join(workdir, "garmin_tokens.json"), tokens_json)
+        self._write_private(os.path.join(workdir, ".garmin_region"), region)
+
+    def prepare_read_back(self, blob: str, workdir: str) -> None:
+        """Restore the DB-owned region constraint without touching disk.
+
+        A fresh gateway may recover a stopped worker's pending token rotation
+        before its first materialize.  Seeding only this in-memory expectation
+        ensures a missing, invalid or opposite-domain sidecar fails closed;
+        calling materialize here would destroy the rotation being recovered.
+        """
+        region, _tokens_json = unpack_blob(blob)
+        self._expected_regions[os.path.realpath(workdir)] = region
+
+    @staticmethod
+    def _write_private(path: str, content: str) -> None:
+        directory = os.path.dirname(path)
+        fd, tmp = tempfile.mkstemp(prefix=".missingmcp-", dir=directory, text=True)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
+            os.replace(tmp, path)
+            os.chmod(path, 0o600)
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+
+    def _read_region(self, workdir: str) -> str:
+        workdir = os.path.realpath(workdir)
+        expected = self._expected_regions.get(workdir)
+        try:
+            with open(os.path.join(workdir, ".garmin_region"), encoding="utf-8") as f:
+                region = f.read()
+        except FileNotFoundError:
+            if expected is None:
+                return REGION_GLOBAL
+            raise GarminBlobError("Garmin region marker is missing") from None
+        region = validate_region(region)
+        if expected is not None and region != expected:
+            raise GarminBlobError("Garmin region marker does not match the account")
+        return region
 
     def read_back(self, workdir: str) -> str | None:
         # garth (inside the worker) rewrites this file when Garmin rotates the
@@ -63,10 +137,12 @@ class GarminWorkerForward:
         try:
             with open(path, encoding="utf-8") as f:
                 content = f.read()
-            json.loads(content)
-        except (OSError, ValueError):
+            tokens_json = normalize_tokens_json(content)
+            region = self._read_region(workdir)
+            os.chmod(path, 0o600)
+        except (OSError, GarminBlobError, ValueError):
             return None
-        return content
+        return pack_blob(tokens_json, region)
 
 
 def _login_error_message(reason: str) -> str:
@@ -88,36 +164,69 @@ class GarminAdapter:
     second_factor_template = "mfa.html"
     landing_template = "garmin.html"
 
-    def __init__(self, config):
+    def __init__(self, config, account_key_resolver: Callable[[str, str], str] | None = None):
         self.forward = GarminWorkerForward(config)
+        self._account_key_resolver = account_key_resolver
 
     def login_hint(self, form: Mapping[str, str]) -> str:
         return form.get("garmin_email", "")
 
+    @staticmethod
+    def _region(form: Mapping[str, str]) -> str:
+        value = form.get("garmin_region")
+        if value is None:
+            return REGION_GLOBAL
+        try:
+            return validate_region(value)
+        except GarminBlobError:
+            raise LoginError("Choose a valid Garmin account region.", reason="auth") from None
+
+    def _account_key(self, email: str, region: str) -> str:
+        normalized = normalize_account_key(email)
+        if self._account_key_resolver is not None:
+            return self._account_key_resolver(normalized, region)
+        return f"{region}:{normalized}"
+
     def start_login(self, form: Mapping[str, str]) -> LoginOk | SecondFactorNeeded:
         email = form.get("garmin_email", "")
         password = form.get("garmin_password", "")
+        region = self._region(form)
         try:
-            result = login.start_login(email, password)
+            result = login.start_login(email, password, is_cn=region == REGION_CN)
         except login.GarminLoginError as e:
             reason = getattr(e, "reason", "unknown")
-            raise LoginError(_login_error_message(reason), reason=reason) from e
+            # Do not retain/log an upstream exception chain: third-party error
+            # strings are not guaranteed to exclude the submitted password.
+            raise LoginError(_login_error_message(reason), reason=reason) from None
         finally:
-            del password  # never retained beyond the login call
+            password = ""  # never returned or placed in MFA state
         if result.status == "needs_mfa":
-            return SecondFactorNeeded(state=(result.pending, email))
-        return LoginOk(account_key=normalize_account_key(email), blob=result.tokens_json)
+            return SecondFactorNeeded(state=(result.pending, email, region))
+        return LoginOk(account_key=self._account_key(email, region),
+                       blob=pack_blob(result.tokens_json, region))
 
     def resume_second_factor(self, state: object, form: Mapping[str, str]) -> LoginOk:
-        pending, email = state
+        pending, email, region = state
+        try:
+            region = validate_region(region)
+        except GarminBlobError:
+            raise LoginError("Garmin MFA session is invalid; please sign in again.") from None
         try:
             tokens = login.resume_login(pending, form.get("mfa_code", ""))
         except Exception as e:  # noqa: BLE001 - wrong/expired code: caller re-prompts
-            raise SecondFactorError("Incorrect or expired code, try again", state=state) from e
-        return LoginOk(account_key=normalize_account_key(email), blob=tokens)
+            raise SecondFactorError("Incorrect or expired code, try again", state=state) from None
+        return LoginOk(account_key=self._account_key(email, region),
+                       blob=pack_blob(tokens, region))
 
-    def verify(self, blob: str) -> str:
+    def verify(self, blob: str) -> Verification:
         try:
-            return login.verify_tokens(blob)
-        except login.GarminLoginError as e:
-            raise LoginError("Garmin sign-in could not be verified") from e
+            region, tokens_json = unpack_blob(blob)
+            verified = login.verify_tokens(tokens_json, is_cn=region == REGION_CN)
+            # Compatibility for injected/older helpers that returned only the
+            # display name. The production helper returns VerifiedTokens.
+            if isinstance(verified, str):
+                return Verification(name=verified, blob=pack_blob(tokens_json, region))
+            return Verification(name=verified.name,
+                                blob=pack_blob(verified.tokens_json, region))
+        except (login.GarminLoginError, GarminBlobError):
+            raise LoginError("Garmin sign-in could not be verified") from None

@@ -75,10 +75,19 @@ The seam between the core and upstream services (spec 2026-07-05).
 ### `adapters/garmin/`
 
 `login.py` is the thin `garminconnect` wrapper (`start_login` MFA-aware with
-transient-block retry, `resume_login`, `verify_tokens`); `GarminAdapter` owns
-form-field names, error copy, account-key normalization and the second-factor
-state; `GarminWorkerForward` owns the worker CLI/env contract + token
-materialization.
+transient-block retry, `resume_login`, `verify_tokens`), with explicit CN/Global
+routing. `blob.py` owns the versioned `{v, region, tokens}` encrypted-blob
+contract, validates the required non-empty `garminconnect==0.3.6` token fields,
+and preserves legacy raw-token → Global compatibility. `GarminAdapter` owns form
+fields, regional account identity and region-preserving second-factor state;
+credential/verification error pages preserve the validated selection, and an
+MFA restart restores it from server-owned pending state rather than POST data.
+`GarminWorkerForward` writes only raw tokens plus a private region marker and
+sets `GARMIN_IS_CN` per worker. Widget-MFA state retains only the response HTML
+needed for continuation, not the password-bearing prepared request. Before the
+request-private login tokenstore is deleted, its path is detached from the
+continuation client; resume detaches it again before any MFA/network work, so a
+refresh cannot recreate an unmanaged plaintext file at the expired path.
 
 Registry: `adapters.build_adapters(config)`. `adapters.RETIRED_ADAPTERS` is the
 explicit frozenset of retired adapters the cleanup loop purges — see
@@ -100,7 +109,8 @@ table + dispatch) that *is* `/whoop/mcp`, running in-process. `__init__.py`'s
 One cohesive module covering metadata (RFC 8414), DCR (RFC 7591), the
 `/<adapter>/oauth/authorize` form + adapter login + MFA two-step, and
 `/<adapter>/oauth/token` exchange. `AuthState` holds the in-memory MFA-pending
-map (TTL 300s).
+map (TTL 300s). `adapter.verify` may return a replacement credential generation;
+all authorize shapes persist that verified generation rather than the candidate.
 
 ### `backup.py`
 
@@ -161,7 +171,8 @@ are a stable schema like the log events.
 
 `WorkerManager(config, forward)`: per-account `asyncio.Lock` (no double-spawn),
 lazy spawn, `/healthz` poll, idle reaper, LRU cap; dirs `0700` are
-manager-owned, credential files come from `forward.materialize` (`0600`).
+manager-owned and use a SHA-256 mapping of the complete opaque account key;
+credential files come from `forward.materialize` (`0600`).
 `spawn` is injectable for tests. Worker stdout/stderr is pumped line-by-line
 into the structured log (`event=worker-log`, `account` attr, ERROR/Traceback
 lines elevated) — no per-user `worker.log` files on the volume.
@@ -183,26 +194,61 @@ the range (never lowest-free-first — that hands the next spawn exactly the
 port its own `_enforce_cap` eviction just freed), and a terminated worker's
 port *cools down* until its process is observed dead, because a SIGTERMed
 uvicorn keeps answering `/healthz` for a moment and a fresh spawn must never
-be validated against its dying predecessor's listener. SIGKILL escalation
-after `_COOLING_KILL_S`, hard expiry after `_COOLING_MAX_S`, so a zombie
-can't shrink the pool. The proxy adds one `ConnectError` retry per forward
+be validated against its dying predecessor's listener. Every reap, eviction,
+shutdown, replacement and failed-start cleanup waits after SIGTERM, escalates
+to SIGKILL, and confirms exit before token read-back or rematerialization.
+Request-time, reaper and eviction waits use the async exit helper and hold the
+target account lock, so other gateway work keeps running without permitting a
+concurrent reuse of that account's directory. Only final synchronous gateway
+shutdown uses the blocking helper.
+There is deliberately no hard expiry: an unconfirmed process keeps its port —
+and, for failed starts, its account workdir — unavailable. The proxy adds one `ConnectError` retry per forward
 (re-running `ensure_worker`) as belt-and-braces.
 
 **Token read-back** (the persist-before-use rule, worker edition): the worker
 rewrites its credential file when the upstream rotates tokens (garth does, on
 Garmin's refresh-token rotation), so the manager persists that file back to the
-store via the injected `persist(key, blob)` callback whenever it differs from
+store via the injected `persist(key, blob, expected_blob)` conditional callback whenever it differs from
 the last store state this process knows (`_persisted`, seeded by every
-materialize). Capture points: the periodic `persist_rotated()` (lifespan loop,
+materialize). The request blob is only a hint: after taking the account lock,
+the manager reloads current durable state through `load(key)`, and reloads it
+again after any possible CAS loss before materializing. Capture points: the
+periodic `persist_rotated()` (lifespan loop,
 under the per-account lock, skipping held locks), the reap/evict paths (the
 account is about to leave the registry), `shutdown()` (deploys are frequent),
-and `ensure_worker`'s respawn path — which then materializes the recovered
-rotation instead of the caller's now-stale blob. A torn (unparseable) file is
-never persisted (`forward.read_back` → None, retried next tick), and a fresh
-process with no baseline trusts the store over the disk — a differing file may
-predate a re-login, so pre-fix drift is repaired only by an explicit backfill.
-Events: `worker-tokens-persisted` / `worker-tokens-persist-failed` (with
-`trigger`).
+`ensure_worker`'s respawn path, and stopped startup processes — which then
+materialize the recovered rotation instead of the caller's now-stale blob.
+Temporary persistence failure on any stopped-worker capture leaves a pending
+capture that later periodic ticks, requests and shutdown retry. A private marker
+records only the expected DB-generation digest, allowing a fresh process to
+resume that exact capture; if the DB has advanced, the marker is discarded and
+the verified DB generation wins before the old file is parsed. The forward
+seeds a read-only expected-region constraint from the encrypted DB blob before
+restart read-back, so a missing, invalid or opposite-domain sidecar cannot be
+promoted to authority. A torn (unparseable) file is never persisted
+(`forward.read_back` → None, retried next tick). Without a matching manager
+marker, a fresh process trusts the store over disk because a differing file may
+predate a re-login.
+Garmin read-back re-packs rotated raw tokens with the marker's unchanged region;
+the conditional write prevents an old worker from overwriting a verified
+re-login. Events: `worker-tokens-persisted` / `worker-tokens-persist-failed` /
+`worker-tokens-persist-skipped` (with `trigger`).
+
+The Garmin recovery script evaluates both the hash-layout and pre-migration
+legacy workdirs, but mtime is classification evidence only, never generation
+lineage. A differing candidate without a matching manager capture marker is
+reported as `untrusted-generation` and `--apply` will not write it. A proven
+capture must still pass token-schema, region-marker, DB timestamp and CAS
+checks. Equally recent conflicting generations are `ambiguous`. Because
+historical ownership was never recorded, a lossy legacy dirname containing a
+transformed character or literal underscore is always ambiguous—even after the
+other colliding DB row was deleted.
+
+Garmin child environments are copied through the forward's sanitization hook:
+deployment-level `GARMIN_EMAIL`, `GARMIN_PASSWORD`, their `_FILE` variants and
+`GARMINTOKENS_BASE64` are removed before the account token directory and region
+are injected. Other worker strategies keep inherited environment behavior
+unless they opt into their own sanitizer.
 
 ### `proxy.py`
 

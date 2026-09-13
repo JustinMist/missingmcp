@@ -14,11 +14,40 @@ from . import backup, report, store, oauth, pages, proxy, security, telemetry, u
 from .config import load_config, Config
 from .workers import WorkerManager
 from .adapters import build_adapters, RETIRED_ADAPTERS
-from .adapters.base import is_remote, is_local, is_upstream_oauth
+from .adapters.base import LoginError, is_remote, is_local, is_upstream_oauth
 from .log import log
 
 _TPL = Path(__file__).parent / "templates"
 _STATIC = Path(__file__).parent / "static"
+
+
+def _garmin_account_key_resolver(conn, config):
+    def resolve(normalized_email: str, region: str) -> str:
+        """Keep an existing legacy Global identity so its Bearers survive.
+
+        New accounts are explicit ``region:email`` identities. A naked legacy
+        key is reused only when its decrypted blob proves Global semantics.
+        """
+        canonical = f"{region}:{normalized_email}"
+        if region == "cn":
+            return canonical
+        legacy = store.get_account_tokens(
+            conn, "garmin", normalized_email, config.gateway_secret)
+        if legacy is None:
+            return canonical
+        from .adapters.garmin.blob import GarminBlobError, unpack_blob
+        try:
+            legacy_region, _tokens = unpack_blob(legacy)
+        except GarminBlobError:
+            return canonical
+        if legacy_region != "global":
+            return canonical
+        if store.account_exists(conn, "garmin", canonical):
+            raise LoginError(
+                "This Garmin Global account has two existing records; contact the operator "
+                "before reconnecting.")
+        return normalized_email
+    return resolve
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -52,7 +81,9 @@ def _run_data_cleanup(conn, orphan_ttl: int, retired_adapters) -> None:
 def build_app(config: Config) -> Starlette:
     conn = store.init_db(config.db_path)
     telemetry.init(config)   # no-op without POSTHOG_API_KEY
-    adapters = build_adapters(config)
+
+    adapters = build_adapters(
+        config, garmin_account_key_resolver=_garmin_account_key_resolver(conn, config))
     # One WorkerManager per worker-based adapter; remote and local adapters need none.
     # NOTE: managers share one port range, one DATA_DIR/users/<key> namespace and
     # one workers.json snapshot — safe while garmin is the only worker-based
@@ -60,11 +91,20 @@ def build_app(config: Config) -> Starlette:
     def _persist_blob(adapter_name):
         # WorkerManager's read-back path: a worker-rotated credential file goes
         # straight back into the store (persist-before-use, worker edition).
-        def persist(key, blob):
-            store.upsert_account(conn, adapter_name, key, blob, config.gateway_secret)
+        def persist(key, blob, expected_blob):
+            return store.update_account_if_matches(
+                conn, adapter_name, key, expected_blob, blob, config.gateway_secret)
         return persist
 
-    managers = {a.name: WorkerManager(config, a.forward, persist=_persist_blob(a.name))
+    def _load_blob(adapter_name):
+        def load(key):
+            return store.get_account_tokens(
+                conn, adapter_name, key, config.gateway_secret)
+        return load
+
+    managers = {a.name: WorkerManager(
+                    config, a.forward, persist=_persist_blob(a.name),
+                    load=_load_blob(a.name))
                 for a in adapters.values()
                 if not is_remote(a.forward) and not is_local(a.forward)}
     # 30 min CSRF TTL: people hunt for passwords / wait on MFA mails longer than

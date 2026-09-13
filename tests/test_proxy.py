@@ -3,7 +3,12 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 from missingmcp import store, proxy, workers, security
 from missingmcp.adapters.garmin import GarminAdapter, GarminWorkerForward
+from missingmcp.adapters.garmin.blob import pack_blob
 from missingmcp.config import load_config
+
+
+GARMIN_TOKENS = ('{"di_client_id":"client-1","di_refresh_token":"refresh-1",'
+                 '"di_token":"access-1"}')
 
 
 def _cfg(tmp_path, fw):
@@ -22,8 +27,125 @@ def _app(conn, mgr, cfg):
 
 
 class FakeProc:
-    def poll(self): return None
-    def terminate(self): pass
+    def __init__(self): self.alive = True
+    def poll(self): return None if self.alive else 0
+    def terminate(self): self.alive = False
+    def kill(self): self.alive = False
+
+
+def test_mcp_request_cannot_change_account_region(tmp_path, fake_worker):
+    from conftest import FakeWorker, _wait_listening
+
+    global_worker = FakeWorker(
+        '{"jsonrpc":"2.0","result":{"worker":"global"}}',
+        "global-session").start()
+    legacy_worker = FakeWorker(
+        '{"jsonrpc":"2.0","result":{"worker":"legacy-global"}}',
+        "legacy-session").start()
+    fake_worker.response_json = (
+        '{"jsonrpc":"2.0","result":{"worker":"cn"}}')
+    fake_worker.session_id = "cn-session"
+    _wait_listening(global_worker.port)
+    _wait_listening(legacy_worker.port)
+    conn = store.init_db(":memory:")
+    ports = [fake_worker.port, global_worker.port, legacy_worker.port]
+    cfg = load_config({
+        "GATEWAY_SECRET": "s" * 40,
+        "PUBLIC_URL": "https://x",
+        "DATA_DIR": str(tmp_path),
+        "WORKER_PORT_START": str(min(ports)),
+        "WORKER_PORT_END": str(max(ports)),
+    })
+    cn_blob = pack_blob(
+        '{"di_token":"cn","di_refresh_token":"cn-r","di_client_id":"cn-c"}', "cn")
+    global_blob = pack_blob(
+        '{"di_token":"global","di_refresh_token":"global-r",'
+        '"di_client_id":"global-c"}', "global")
+    store.upsert_account(conn, "garmin", "cn:me@x.cz", cn_blob, cfg.gateway_secret)
+    store.upsert_account(conn, "garmin", "global:me@x.cz", global_blob, cfg.gateway_secret)
+    store.create_access_token(conn, store.hash_token("cn-bearer"),
+                              "garmin", "cn:me@x.cz", "c1")
+    store.create_access_token(conn, store.hash_token("global-bearer"),
+                              "garmin", "global:me@x.cz", "c2")
+    legacy_blob = GARMIN_TOKENS
+    store.upsert_account(conn, "garmin", "legacy@x.cz", legacy_blob,
+                         cfg.gateway_secret)
+    store.create_access_token(conn, store.hash_token("legacy-bearer"),
+                              "garmin", "legacy@x.cz", "c3")
+    store.create_access_token(conn, store.hash_token("gone-bearer"),
+                              "garmin", "cn:gone@x.cz", "c4")
+    spawned = []
+    forward = GarminWorkerForward(cfg)
+
+    def spawn(key, port, token_dir):
+        spawned.append((key, port, token_dir, forward.env(port, token_dir)))
+        return FakeProc()
+
+    def load(key):
+        return store.get_account_tokens(
+            conn, "garmin", key, cfg.gateway_secret)
+
+    def persist(key, value, expected):
+        return store.update_account_if_matches(
+            conn, "garmin", key, expected, value, cfg.gateway_secret)
+
+    mgr = workers.WorkerManager(
+        cfg, forward, spawn=spawn, load=load, persist=persist)
+    c = _app(conn, mgr, cfg)
+    try:
+        mgr._port_cursor = fake_worker.port
+        forged = {
+            "jsonrpc": "2.0", "method": "tools/call",
+            "params": {"name": "get_profile", "arguments": {
+                "region": "global", "garmin_region": "global",
+                "account_key": "global:me@x.cz", "email": "me@x.cz"}},
+        }
+        response = c.post(
+            "/mcp?region=global&account_key=global:me@x.cz", json=forged,
+            headers={"Authorization": "Bearer cn-bearer",
+                     "X-Garmin-Region": "global",
+                     "Mcp-Session-Id": "global-session"})
+        assert response.status_code == 200
+        assert response.json()["result"]["worker"] == "cn"
+        assert response.headers["mcp-session-id"] == "cn-session"
+
+        mgr._port_cursor = global_worker.port
+        response = c.post(
+            "/mcp?region=cn", json={"jsonrpc": "2.0", "method": "initialize",
+                                    "params": {"region": "cn"}},
+            headers={"Authorization": "Bearer global-bearer",
+                     "X-Garmin-Region": "cn"})
+        assert response.status_code == 200
+        assert response.json()["result"]["worker"] == "global"
+        assert response.headers["mcp-session-id"] == "global-session"
+
+        mgr._port_cursor = legacy_worker.port
+        response = c.post(
+            "/mcp?region=cn", json={"jsonrpc": "2.0", "method": "initialize"},
+            headers={"Authorization": "Bearer legacy-bearer",
+                     "X-Garmin-Region": "cn"})
+        assert response.status_code == 200
+        assert response.json()["result"]["worker"] == "legacy-global"
+
+        before = len(spawned)
+        response = c.post(
+            "/mcp?region=global", json={"jsonrpc": "2.0", "method": "initialize"},
+            headers={"Authorization": "Bearer gone-bearer",
+                     "X-Garmin-Region": "global"})
+        assert response.status_code == 401
+        assert len(spawned) == before
+
+        assert [item[0] for item in spawned] == [
+            "cn:me@x.cz", "global:me@x.cz", "legacy@x.cz"]
+        assert [item[3]["GARMIN_IS_CN"] for item in spawned] == [
+            "true", "false", "false"]
+        assert len({item[2] for item in spawned}) == 3
+        assert fake_worker.calls[-1][2]["Mcp-Session-Id"] == "global-session"
+    finally:
+        mgr.shutdown()
+        conn.close()
+        global_worker.stop()
+        legacy_worker.stop()
 
 
 def test_unauthorized_without_bearer(tmp_path, fake_worker):
@@ -39,7 +161,7 @@ def test_authorized_forwards_to_worker(tmp_path, fake_worker):
     conn = store.init_db(":memory:")
     cfg = _cfg(tmp_path, fake_worker)
     token = "tok-123"
-    store.upsert_account(conn, "garmin", "me@x.cz", '{"t":1}', cfg.gateway_secret)
+    store.upsert_account(conn, "garmin", "me@x.cz", GARMIN_TOKENS, cfg.gateway_secret)
     store.create_access_token(conn, store.hash_token(token), "garmin", "me@x.cz", "c1")
     mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc())
     c = _app(conn, mgr, cfg)
@@ -69,7 +191,7 @@ def test_worker_start_failure_maps_to_reauth_401(tmp_path, fake_worker):
     conn = store.init_db(":memory:")
     cfg = _cfg(tmp_path, fake_worker)
     token = "tok-fail"
-    store.upsert_account(conn, "garmin", "me@x.cz", '{"t":1}', cfg.gateway_secret)
+    store.upsert_account(conn, "garmin", "me@x.cz", GARMIN_TOKENS, cfg.gateway_secret)
     store.create_access_token(conn, store.hash_token(token), "garmin", "me@x.cz", "c1")
 
     def boom(*a):
@@ -105,7 +227,7 @@ def test_stale_credentials_worker_exit_maps_to_reauth_401(tmp_path, fake_worker)
     conn = store.init_db(":memory:")
     cfg = _cfg(tmp_path, fake_worker)
     token = "tok-stale"
-    store.upsert_account(conn, "garmin", "me@x.cz", '{"t":1}', cfg.gateway_secret)
+    store.upsert_account(conn, "garmin", "me@x.cz", GARMIN_TOKENS, cfg.gateway_secret)
     store.create_access_token(conn, store.hash_token(token), "garmin", "me@x.cz", "c1")
 
     class SelfExitedProc:
@@ -152,7 +274,7 @@ def test_authenticated_client_exceeds_unauth_limit(tmp_path, fake_worker):
     conn = store.init_db(":memory:")
     cfg = _cfg(tmp_path, fake_worker)
     token = "tok-heavy"
-    store.upsert_account(conn, "garmin", "me@x.cz", '{"t":1}', cfg.gateway_secret)
+    store.upsert_account(conn, "garmin", "me@x.cz", GARMIN_TOKENS, cfg.gateway_secret)
     store.create_access_token(conn, store.hash_token(token), "garmin", "me@x.cz", "c1")
     mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc())
     c = _app(conn, mgr, cfg)
@@ -249,7 +371,8 @@ def test_stream_teardown_is_a_warn_not_a_traceback(tmp_path, capsys):
                            "DATA_DIR": str(tmp_path),
                            "WORKER_PORT_START": str(port), "WORKER_PORT_END": str(port)})
         token = "tok-cut"
-        store.upsert_account(conn, "garmin", "me@x.cz", '{"t":1}', cfg.gateway_secret)
+        store.upsert_account(conn, "garmin", "me@x.cz", GARMIN_TOKENS,
+                             cfg.gateway_secret)
         store.create_access_token(conn, store.hash_token(token), "garmin", "me@x.cz", "c1")
         mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc())
         c = _app(conn, mgr, cfg)
@@ -279,7 +402,7 @@ def test_connect_error_is_retried_once_against_a_fresh_worker(tmp_path, fake_wor
     conn = store.init_db(":memory:")
     cfg = _cfg(tmp_path, fake_worker)
     token = "tok-retry"
-    store.upsert_account(conn, "garmin", "me@x.cz", '{"t":1}', cfg.gateway_secret)
+    store.upsert_account(conn, "garmin", "me@x.cz", GARMIN_TOKENS, cfg.gateway_secret)
     store.create_access_token(conn, store.hash_token(token), "garmin", "me@x.cz", "c1")
     mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc())
 
@@ -309,7 +432,7 @@ def test_connect_error_retry_gives_up_after_one_attempt(tmp_path, fake_worker, c
     conn = store.init_db(":memory:")
     cfg = _cfg(tmp_path, fake_worker)
     token = "tok-giveup"
-    store.upsert_account(conn, "garmin", "me@x.cz", '{"t":1}', cfg.gateway_secret)
+    store.upsert_account(conn, "garmin", "me@x.cz", GARMIN_TOKENS, cfg.gateway_secret)
     store.create_access_token(conn, store.hash_token(token), "garmin", "me@x.cz", "c1")
     mgr = workers.WorkerManager(cfg, GarminWorkerForward(cfg), spawn=lambda *a: FakeProc())
 

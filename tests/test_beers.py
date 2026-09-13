@@ -77,6 +77,15 @@ def test_account_key_exists_matches_any_adapter(conn):
     assert store.account_key_exists(conn, "w@x.cz")
 
 
+def test_account_key_exists_matches_regional_garmin_identity(conn):
+    store.upsert_account(conn, "garmin", "cn=c@x.cz", "{}", SECRET)
+    store.upsert_account(conn, "garmin", "cn:g@x.cz", "{}", SECRET)
+    store.upsert_account(conn, "garmin", "global:h@x.cz", "{}", SECRET)
+    assert not store.account_key_exists(conn, "c@x.cz")  # no generic suffix match
+    assert store.account_key_exists(conn, "g@x.cz")
+    assert store.account_key_exists(conn, "h@x.cz")
+
+
 def test_add_beer_inserts_row_and_returns_id(conn):
     rid = store.add_beer(conn, email="me@x.cz", beers=3, amount=15.0, currency="EUR",
                          matched=1, source="manual", created_at="2026-07-20 00:00:00")

@@ -1,6 +1,8 @@
 import re
 import hashlib
 import base64
+import json
+import time
 import pytest
 from unittest.mock import patch
 from urllib.parse import urlparse, parse_qs
@@ -9,10 +11,30 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 from missingmcp import store, oauth, security
 from missingmcp.adapters.garmin import GarminAdapter, login as garmin_login
+from missingmcp.adapters.garmin.blob import pack_blob, unpack_blob
 from missingmcp.config import load_config
 
 CONFIG = load_config({"GATEWAY_SECRET": "z" * 40, "PUBLIC_URL": "https://gw.example.com"})
 ADAPTER = GarminAdapter(CONFIG)
+
+
+def _tokens(generation: int) -> str:
+    return (f'{{"di_client_id":"client-{generation}",'
+            f'"di_refresh_token":"refresh-{generation}",'
+            f'"di_token":"access-{generation}"}}')
+
+
+def _assert_checked_region(body: str, expected: str) -> None:
+    tags = {
+        region: re.search(
+            rf'<input[^>]+name="garmin_region"[^>]+value="{region}"[^>]*>',
+            body,
+        ).group(0)
+        for region in ("cn", "global")
+    }
+    assert "checked" in tags[expected]
+    other = "global" if expected == "cn" else "cn"
+    assert "checked" not in tags[other]
 
 
 @pytest.fixture
@@ -20,6 +42,32 @@ def conn():
     c = store.init_db(":memory:")
     yield c
     c.close()
+
+
+def _seed_garmin_identity_sentinels(conn):
+    """Give failure tests something valuable at every compatible identity.
+
+    Comparing only the opposite-region key can pass while the requested-region
+    row (or a legacy row) was corrupted.  These sentinels make the assertion
+    cover the complete Garmin identity namespace.
+    """
+    store.upsert_account(conn, "garmin", "me@x.cz", _tokens(70),
+                         CONFIG.gateway_secret)
+    store.upsert_account(conn, "garmin", "cn:me@x.cz",
+                         pack_blob(_tokens(71), "cn"), CONFIG.gateway_secret)
+    store.upsert_account(conn, "garmin", "global:me@x.cz",
+                         pack_blob(_tokens(72), "global"), CONFIG.gateway_secret)
+
+
+def _authorization_security_state(conn):
+    accounts = [tuple(row) for row in conn.execute(
+        "SELECT adapter, account_key, blob_enc, created_at, updated_at "
+        "FROM accounts ORDER BY adapter, account_key")]
+    codes = [tuple(row) for row in conn.execute(
+        "SELECT code_hash, adapter, client_id, redirect_uri, code_challenge, "
+        "code_challenge_method, account_key, expires_at, created_at "
+        "FROM oauth_codes ORDER BY code_hash")]
+    return accounts, codes
 
 
 def test_metadata_shape():
@@ -105,6 +153,9 @@ def test_authorize_get_renders_form(conn):
     })
     assert r.status_code == 200
     assert "garmin_email" in r.text
+    assert 'name="garmin_region"' in r.text
+    assert 'value="cn"' in r.text and 'value="global"' in r.text
+    assert 'value="global" required checked' in r.text
     assert "csrf" in r.text
     assert 'action="/garmin/oauth/authorize"' in r.text
 
@@ -125,8 +176,10 @@ def test_login_no_mfa_redirects_with_code(conn):
     # obtain a CSRF token the way the GET would mint one
     csrf = state.csrf.issue()
     with patch.object(garmin_login, "start_login",
-                      return_value=garmin_login.LoginResult(status="ok", tokens_json='{"t":1}')), \
-         patch.object(garmin_login, "verify_tokens", return_value="Vaclav S"), \
+                      return_value=garmin_login.LoginResult(
+                          status="ok", tokens_json=_tokens(1))), \
+         patch.object(garmin_login, "verify_tokens", return_value=garmin_login.VerifiedTokens(
+             name="Vaclav S", tokens_json=_tokens(2))), \
          patch.object(oauth, "log") as log_spy:
         r = client.post("/oauth/authorize", data={
             "csrf": csrf, "client_id": cid, "redirect_uri": "https://claude.ai/cb",
@@ -137,11 +190,103 @@ def test_login_no_mfa_redirects_with_code(conn):
     q = parse_qs(urlparse(r.headers["location"]).query)
     assert q["state"] == ["xyz"]
     assert q["code"]
-    # account stored under normalized (lowercased) email
-    assert store.get_account_tokens(conn, "garmin", "me@x.cz", CONFIG.gateway_secret) == '{"t":1}'
+    # Missing region remains backward-compatible Global, with explicit identity/blob.
+    stored = store.get_account_tokens(
+        conn, "garmin", "global:me@x.cz", CONFIG.gateway_secret)
+    assert unpack_blob(stored) == ("global", _tokens(2))
     # operators query this exact literal in Railway logs — a typo here breaks monitoring silently
     status_calls = [c.kwargs["status"] for c in log_spy.call_args_list if c.args and c.args[0] == "login-start-result"]
     assert status_calls == ["ok"]
+
+
+@pytest.mark.parametrize("region,domain", [
+    ("global", "garmin.com"),
+    ("cn", "garmin.cn"),
+])
+def test_oauth_persists_in_memory_refresh_when_dependency_dump_fails(
+        conn, region, domain):
+    """End-to-end authorize persistence uses G2 even when auto-dump lost it."""
+    payload = base64.urlsafe_b64encode(json.dumps({
+        "exp": int(time.time()) - 60,
+    }).encode()).decode().rstrip("=")
+    candidate = json.dumps({
+        "di_token": f"header.{payload}.signature",
+        "di_refresh_token": "old-refresh",
+        "di_client_id": "client",
+    }, sort_keys=True, separators=(",", ":"))
+    client, state = _authz_app(conn)
+    cid = _register(conn)
+    csrf = state.csrf.issue()
+    Client = type(garmin_login.Garmin().client)
+    urls = []
+
+    class Reply:
+        status_code = 200
+        ok = True
+        text = "synthetic"
+        content = b"synthetic"
+
+        def json(self):
+            return {
+                "access_token": "fresh-access",
+                "refresh_token": "fresh-refresh",
+            }
+
+    def http_post(self, url, **_kwargs):
+        urls.append(url)
+        return Reply()
+
+    def failed_dump(self, _path):
+        raise OSError("synthetic read-only token directory")
+
+    with patch.object(garmin_login, "start_login", return_value=
+                      garmin_login.LoginResult(status="ok", tokens_json=candidate)), \
+         patch.object(Client, "_http_post", http_post), \
+         patch.object(Client, "dump", failed_dump), \
+         patch.object(garmin_login.Garmin, "_load_profile_and_settings",
+                      return_value=None):
+        response = client.post("/oauth/authorize", data={
+            "csrf": csrf,
+            "client_id": cid,
+            "redirect_uri": "https://claude.ai/cb",
+            "state": "xyz",
+            "code_challenge": "abc",
+            "code_challenge_method": "S256",
+            "garmin_email": "me@x.cz",
+            "garmin_password": "not-persisted",
+            "garmin_region": region,
+        })
+
+    assert response.status_code == 302
+    assert urls == [
+        f"https://diauth.{domain}/di-oauth2-service/oauth/token"]
+    stored = store.get_account_tokens(
+        conn, "garmin", f"{region}:me@x.cz", CONFIG.gateway_secret)
+    stored_region, stored_tokens = unpack_blob(stored)
+    assert stored_region == region
+    assert json.loads(stored_tokens) == {
+        "di_token": "fresh-access",
+        "di_refresh_token": "fresh-refresh",
+        "di_client_id": "client",
+    }
+    assert "not-persisted" not in "\n".join(conn.iterdump())
+
+
+def test_invalid_region_is_rejected_before_garmin_and_persists_nothing(conn):
+    client, state = _authz_app(conn)
+    cid = _register(conn)
+    csrf = state.csrf.issue()
+    with patch.object(garmin_login, "start_login") as start:
+        r = client.post("/oauth/authorize", data={
+            "csrf": csrf, "client_id": cid, "redirect_uri": "https://claude.ai/cb",
+            "state": "xyz", "code_challenge": "abc", "code_challenge_method": "S256",
+            "garmin_email": "me@x.cz", "garmin_password": "do-not-store",
+            "garmin_region": "eu",
+        })
+    assert r.status_code == 200 and "valid Garmin account region" in r.text
+    start.assert_not_called()
+    assert store.list_accounts(conn) == []
+    assert "do-not-store" not in "\n".join(conn.iterdump())
 
 
 def test_login_mfa_then_verify_redirects(conn):
@@ -155,6 +300,7 @@ def test_login_mfa_then_verify_redirects(conn):
             "csrf": csrf1, "client_id": cid, "redirect_uri": "https://claude.ai/cb",
             "state": "xyz", "code_challenge": "abc", "code_challenge_method": "S256",
             "garmin_email": "me@x.cz", "garmin_password": "pw",
+            "garmin_region": "cn",
         })
     assert r1.status_code == 200 and "login_id" in r1.text
     # operators query this exact literal in Railway logs — a typo here breaks monitoring silently
@@ -164,13 +310,17 @@ def test_login_mfa_then_verify_redirects(conn):
     # extract login_id and a fresh csrf rendered into the MFA page
     login_id = re.search(r'name="login_id" value="([^"]+)"', r1.text).group(1)
     csrf2 = re.search(r'name="csrf" value="([^"]+)"', r1.text).group(1)
-    with patch.object(garmin_login, "resume_login", return_value='{"t":9}'), \
-         patch.object(garmin_login, "verify_tokens", return_value="Vaclav S"):
+    with patch.object(garmin_login, "resume_login", return_value=_tokens(9)), \
+         patch.object(garmin_login, "verify_tokens", return_value=garmin_login.VerifiedTokens(
+             name="Vaclav S", tokens_json=_tokens(10))):
         r2 = client.post("/oauth/authorize", data={
             "csrf": csrf2, "login_id": login_id, "mfa_code": "123456",
+            # Client-supplied MFA region is ignored; pending state is authoritative.
+            "garmin_region": "global",
         })
     assert r2.status_code == 302
-    assert store.get_account_tokens(conn, "garmin", "me@x.cz", CONFIG.gateway_secret) == '{"t":9}'
+    stored = store.get_account_tokens(conn, "garmin", "cn:me@x.cz", CONFIG.gateway_secret)
+    assert unpack_blob(stored) == ("cn", _tokens(10))
 
 
 def test_authorize_get_unknown_client_explains_recovery(conn, capsys):
@@ -227,6 +377,27 @@ def test_authorize_post_bad_csrf_rerenders_form(conn):
     assert 'name="csrf" value="' in r.text
 
 
+def test_mfa_bad_csrf_restarts_with_server_owned_cn_region(conn):
+    client, state = _authz_app(conn)
+    cid = _register(conn)
+    params = {
+        "client_id": cid, "redirect_uri": "https://claude.ai/cb",
+        "state": "s", "code_challenge": "abc",
+        "code_challenge_method": "S256", "_authorize_region": "cn",
+    }
+    lid = state.put_mfa((('P', 'S'), "me@x.cz", "cn"), params, "garmin")
+    r = client.post("/oauth/authorize", data={
+        "csrf": "forged", "login_id": lid, "mfa_code": "123456",
+        # A client cannot switch the restart page back to Global.
+        "garmin_region": "global",
+    })
+    assert r.status_code == 200
+    assert "session expired" in r.text.lower()
+    assert f'name="client_id" value="{cid}"' in r.text
+    _assert_checked_region(r.text, "cn")
+    assert state.peek_mfa(lid, "garmin") is not None
+
+
 def test_authorize_get_rejects_non_s256(conn):
     client, _ = _authz_app(conn)
     cid = _register(conn)
@@ -254,7 +425,7 @@ def test_authorize_post_mfa_rejects_tampered_redirect(conn):
     cid = _register(conn)
     params = {"client_id": cid, "redirect_uri": "https://evil.com/cb", "state": "s",
               "code_challenge": "abc", "code_challenge_method": "S256"}
-    lid = state.put_mfa((("P", "S"), "me@x.cz"), params, "garmin")
+    lid = state.put_mfa((("P", "S"), "me@x.cz", "global"), params, "garmin")
     csrf = state.csrf.issue()
     r = client.post("/oauth/authorize", data={"csrf": csrf, "login_id": lid, "mfa_code": "123456"})
     assert r.status_code == 400
@@ -300,14 +471,17 @@ def test_login_blocked_shows_retry_message(conn):
             "csrf": csrf, "client_id": cid, "redirect_uri": "https://claude.ai/cb",
             "state": "xyz", "code_challenge": "abc", "code_challenge_method": "S256",
             "garmin_email": "me@x.cz", "garmin_password": "pw",
+            "garmin_region": "cn",
         })
     assert r.status_code == 200
     assert "rate-limiting" in r.text                         # Garmin-side limit, not "wrong password"
     assert "not your password" in r.text
     assert "garmin_email" in r.text                          # form re-rendered to retry
+    _assert_checked_region(r.text, "cn")
 
 
-def test_login_timeout_shows_retry_message(conn):
+@pytest.mark.parametrize("region", ["cn", "global"])
+def test_login_timeout_shows_retry_message(conn, region):
     # A synchronous Garmin sign-in that Garmin is rate-limiting can block for
     # minutes (observed: a 125s authorize POST). The handler must cap it and
     # re-render the form instead of hanging (and instead of freezing the loop).
@@ -316,40 +490,54 @@ def test_login_timeout_shows_retry_message(conn):
     cfg = dataclasses.replace(CONFIG, login_timeout=0.05)
     client, state = _authz_app(conn, cfg)
     cid = _register(conn)
+    _seed_garmin_identity_sentinels(conn)
+    before = _authorization_security_state(conn)
     csrf = state.csrf.issue()
 
     def _slow(*a, **k):
         _time.sleep(0.4)  # far longer than the 0.05s deadline
-        return garmin_login.LoginResult(status="ok", tokens_json='{"t":1}')
+        return garmin_login.LoginResult(status="ok", tokens_json=_tokens(1))
 
     with patch.object(garmin_login, "start_login", side_effect=_slow):
         r = client.post("/oauth/authorize", data={
             "csrf": csrf, "client_id": cid, "redirect_uri": "https://claude.ai/cb",
             "state": "xyz", "code_challenge": "abc", "code_challenge_method": "S256",
             "garmin_email": "me@x.cz", "garmin_password": "pw",
+            "garmin_region": region,
         })
     assert r.status_code == 200
     assert "timed out" in r.text.lower()                 # honest timeout message
     assert "garmin_email" in r.text                      # form re-rendered to retry
-    assert store.get_account_tokens(conn, "garmin", "me@x.cz", CONFIG.gateway_secret) is None
+    _assert_checked_region(r.text, region)
+    assert _authorization_security_state(conn) == before
+    # asyncio.to_thread cannot kill the abandoned synchronous call.  Assert
+    # again after it completes so a late success cannot commit tokens/code.
+    _time.sleep(0.45)
+    assert _authorization_security_state(conn) == before
 
 
-def test_login_verify_failure_rerenders_form(conn):
+@pytest.mark.parametrize("region", ["cn", "global"])
+def test_login_verify_failure_rerenders_form(conn, region):
     client, state = _authz_app(conn)
     cid = _register(conn)
+    _seed_garmin_identity_sentinels(conn)
+    before = _authorization_security_state(conn)
     csrf = state.csrf.issue()
     with patch.object(garmin_login, "start_login",
-                      return_value=garmin_login.LoginResult(status="ok", tokens_json='{"t":1}')), \
+                      return_value=garmin_login.LoginResult(
+                          status="ok", tokens_json=_tokens(1))), \
          patch.object(garmin_login, "verify_tokens",
                       side_effect=garmin_login.GarminLoginError("bad")):
         r = client.post("/oauth/authorize", data={
             "csrf": csrf, "client_id": cid, "redirect_uri": "https://claude.ai/cb",
             "state": "xyz", "code_challenge": "abc", "code_challenge_method": "S256",
             "garmin_email": "me@x.cz", "garmin_password": "pw",
+            "garmin_region": region,
         })
     assert r.status_code == 200
     assert "garmin_email" in r.text                      # re-rendered login form
-    assert store.get_account_tokens(conn, "garmin", "me@x.cz", CONFIG.gateway_secret) is None  # not stored
+    _assert_checked_region(r.text, region)
+    assert _authorization_security_state(conn) == before
 
 
 def test_mfa_wrong_code_reprompts(conn):
@@ -357,7 +545,7 @@ def test_mfa_wrong_code_reprompts(conn):
     cid = _register(conn)
     params = {"client_id": cid, "redirect_uri": "https://claude.ai/cb", "state": "s",
               "code_challenge": "abc", "code_challenge_method": "S256"}
-    lid = state.put_mfa((("P", "S"), "me@x.cz"), params, "garmin")
+    lid = state.put_mfa((("P", "S"), "me@x.cz", "global"), params, "garmin")
     csrf = state.csrf.issue()
     with patch.object(garmin_login, "resume_login", side_effect=Exception("wrong code")):
         r = client.post("/oauth/authorize", data={"csrf": csrf, "login_id": lid, "mfa_code": "000000"})
@@ -365,20 +553,25 @@ def test_mfa_wrong_code_reprompts(conn):
     assert "login_id" in r.text                          # re-prompts MFA form
 
 
-def test_mfa_verify_failure_restarts(conn):
+@pytest.mark.parametrize("region", ["cn", "global"])
+def test_mfa_verify_failure_restarts(conn, region):
     client, state = _authz_app(conn)
     cid = _register(conn)
+    _seed_garmin_identity_sentinels(conn)
+    before = _authorization_security_state(conn)
     params = {"client_id": cid, "redirect_uri": "https://claude.ai/cb", "state": "s",
-              "code_challenge": "abc", "code_challenge_method": "S256"}
-    lid = state.put_mfa((("P", "S"), "me@x.cz"), params, "garmin")
+              "code_challenge": "abc", "code_challenge_method": "S256",
+              "_authorize_region": region}
+    lid = state.put_mfa((("P", "S"), "me@x.cz", region), params, "garmin")
     csrf = state.csrf.issue()
-    with patch.object(garmin_login, "resume_login", return_value='{"t":1}'), \
+    with patch.object(garmin_login, "resume_login", return_value=_tokens(1)), \
          patch.object(garmin_login, "verify_tokens",
                       side_effect=garmin_login.GarminLoginError("bad")):
         r = client.post("/oauth/authorize", data={"csrf": csrf, "login_id": lid, "mfa_code": "123456"})
     assert r.status_code == 200
     assert "garmin_email" in r.text                      # back to the login form
-    assert store.get_account_tokens(conn, "garmin", "me@x.cz", CONFIG.gateway_secret) is None  # not stored
+    _assert_checked_region(r.text, region)
+    assert _authorization_security_state(conn) == before
 
 
 def test_mfa_resume_login_error_restarts_login(conn):
@@ -388,14 +581,16 @@ def test_mfa_resume_login_error_restarts_login(conn):
     client, state = _authz_app(conn)
     cid = _register(conn)
     params = {"client_id": cid, "redirect_uri": "https://claude.ai/cb", "state": "s",
-              "code_challenge": "abc", "code_challenge_method": "S256"}
-    lid = state.put_mfa((("P", "S"), "me@x.cz"), params, "garmin")
+              "code_challenge": "abc", "code_challenge_method": "S256",
+              "_authorize_region": "cn"}
+    lid = state.put_mfa((("P", "S"), "me@x.cz", "cn"), params, "garmin")
     csrf = state.csrf.issue()
     with patch.object(ADAPTER, "resume_second_factor",
                       side_effect=LoginError("session vanished")):
         r = client.post("/oauth/authorize", data={"csrf": csrf, "login_id": lid, "mfa_code": "123456"})
     assert r.status_code == 200
     assert "garmin_email" in r.text                      # back to the login form
+    _assert_checked_region(r.text, "cn")
 
 
 def test_token_exchange_bad_pkce(conn):
@@ -503,7 +698,7 @@ def test_mfa_login_id_from_another_adapter_is_rejected(conn, fake_remote):
     client, state, _, _ = _remote_authz(conn, fake_remote)
     params = {"client_id": "cg", "redirect_uri": "https://claude.ai/cb", "state": "s",
               "code_challenge": "abc", "code_challenge_method": "S256"}
-    lid = state.put_mfa((("P", "S"), "me@x.cz"), params, "garmin")
+    lid = state.put_mfa((("P", "S"), "me@x.cz", "global"), params, "garmin")
     csrf = state.csrf.issue()
     r = client.post("/oauth/authorize", data={"csrf": csrf, "login_id": lid, "mfa_code": "123456"})
     assert r.status_code == 400

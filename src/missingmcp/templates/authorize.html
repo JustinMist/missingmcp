@@ -14,6 +14,11 @@
     {ERROR}
     <form method="post" action="{AUTHORIZE_ACTION}">
 {OAUTH_FIELDS}
+      <fieldset>
+        <legend>Garmin account region</legend>
+        <label><input name="garmin_region" type="radio" value="cn" required{CN_CHECKED}> China (garmin.cn)</label>
+        <label><input name="garmin_region" type="radio" value="global" required{GLOBAL_CHECKED}> Global (garmin.com)</label>
+      </fieldset>
       <label>Garmin email<input name="garmin_email" type="email" required></label>
       <label>Garmin password<input name="garmin_password" type="password" required></label>
       <button class="btn" type="submit">Sign in</button>

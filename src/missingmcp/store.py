@@ -208,6 +208,30 @@ def upsert_account(conn, adapter: str, account_key: str, blob: str, secret: str)
     conn.commit()
 
 
+def update_account_if_matches(conn, adapter: str, account_key: str,
+                              expected_blob: str, blob: str, secret: str) -> bool:
+    """Replace an account blob only while it is still the expected generation.
+
+    Worker token refresh happens outside SQLite. A concurrent browser re-login
+    must win over a late refresh from the old worker, so read-back callers use
+    this compare-and-swap instead of an unconditional upsert.
+    """
+    row = conn.execute(
+        "SELECT blob_enc FROM accounts WHERE adapter=? AND account_key=?",
+        (adapter, account_key),
+    ).fetchone()
+    if row is None or decrypt(secret, row["blob_enc"]) != expected_blob:
+        return False
+    new_enc = encrypt(secret, blob)
+    cur = conn.execute(
+        """UPDATE accounts SET blob_enc=?, updated_at=datetime('now')
+           WHERE adapter=? AND account_key=? AND blob_enc=?""",
+        (new_enc, adapter, account_key, row["blob_enc"]),
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
 def account_exists(conn, adapter: str, account_key: str) -> bool:
     """Cheap existence probe (no decrypt) — telemetry's new|returning signal,
     checked before upsert_account overwrites the row."""
@@ -545,11 +569,17 @@ def list_suggestions(conn) -> list[dict]:
 # PostHog (the beer_purchased event). See the 2026-07-24 beer-supporters spec.
 
 def account_key_exists(conn, email: str) -> bool:
-    """True if the (normalized) email is a login account_key under any adapter —
-    the best-effort attribution probe for a beer donation. Same identity the
-    connect funnel keys on (distinct_id = plain login email)."""
+    """Best-effort email attribution probe for a beer donation.
+
+    Most adapters and legacy Garmin accounts use the normalized email directly;
+    regional Garmin identities prefix it with ``cn:`` or ``global:``.
+    """
     return conn.execute(
-        "SELECT 1 FROM accounts WHERE account_key = ? LIMIT 1", (email,)
+        """SELECT 1 FROM accounts
+           WHERE account_key = ?
+              OR (adapter='garmin' AND account_key IN (?, ?))
+           LIMIT 1""",
+        (email, f"cn:{email}", f"global:{email}"),
     ).fetchone() is not None
 
 

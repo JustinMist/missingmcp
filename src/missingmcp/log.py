@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 import traceback
@@ -15,6 +16,55 @@ _file: TextIO | None = None
 _sink = None
 
 _VALID_LEVELS = {"debug", "info", "warning", "error", "critical"}
+_SECRET_KEYS = frozenset({
+    "authorization", "access_token", "refresh_token", "token",
+    "di_token", "di_refresh_token", "oauth1_token", "oauth2_token",
+    "password", "garmin_password", "garmin_password_file",
+    "garmintokens_base64", "mfa_code", "client_secret",
+})
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(?P<quote>[\"']?)"
+    r"(?P<key>garmin_password_file|garmintokens_base64|garmin_password|"
+    r"di_refresh_token|di_token|refresh_token|access_token|oauth1_token|"
+    r"oauth2_token|client_secret|mfa_code|password|token)"
+    r"(?P=quote)(?![A-Za-z0-9_])(?P<sep>\s*[:=]\s*)"
+    r"(?:Bearer\s+)?(?P<value>\"(?:\\.|[^\"\\])*\"|"
+    r"'(?:\\.|[^'\\])*'|[^\s,}\]]+)"
+)
+_AUTHORIZATION_ASSIGNMENT = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])(?P<quote>[\"']?)authorization(?P=quote)"
+    r"(?![A-Za-z0-9_])(?P<sep>\s*[:=]\s*)"
+    # Authorization values commonly contain a scheme plus whitespace. Consume
+    # the complete field, not only "Basic"/"Digest" while leaving the secret.
+    r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\r\n,}\]]+)"
+)
+_AUTHORIZATION_HEADER = re.compile(
+    # An unquoted Authorization assignment is a log rendering of an HTTP
+    # header, not a JSON string. Digest values contain comma-separated nonce /
+    # response parameters, so redact through end-of-line. Quoted JSON/dict
+    # keys are deliberately excluded and handled by the escaped-string regex
+    # above, which preserves their structural boundary.
+    r"(?i)(?<![A-Za-z0-9_\"'])(?P<key>authorization)"
+    r"(?![A-Za-z0-9_])(?P<sep>\s*[:=]\s*)(?P<value>[^\r\n]+)"
+)
+
+
+def _redact(value: str) -> str:
+    """Remove common credential assignments from third-party log text."""
+    def replace(match: re.Match) -> str:
+        quote = match.groupdict().get("quote") or ""
+        replacement = f"{quote}[REDACTED]{quote}" if quote else "[REDACTED]"
+        key = match.groupdict().get("key") or "Authorization"
+        return (f"{quote}{key}{quote}"
+                f"{match.group('sep')}{replacement}")
+    value = _AUTHORIZATION_ASSIGNMENT.sub(replace, value)
+    value = _AUTHORIZATION_HEADER.sub(replace, value)
+    return _SECRET_ASSIGNMENT.sub(replace, value)
+
+
+def _secret_key(key: object) -> bool:
+    normalized = str(key).strip().lower().replace("-", "_")
+    return normalized in _SECRET_KEYS
 
 
 def set_sink(fn) -> None:
@@ -85,7 +135,14 @@ def _emit(level: str, event: str, fields: dict[str, Any]) -> None:
     for k, v in fields.items():
         if k in ("ts", "level", "event"):   # never let a field clobber the envelope
             k = f"field_{k}"
-        record[k] = v if isinstance(v, (str, int, float, bool)) or v is None else str(v)
+        if _secret_key(k):
+            record[k] = "[REDACTED]"
+        elif isinstance(v, str):
+            record[k] = _redact(v)
+        elif isinstance(v, (int, float, bool)) or v is None:
+            record[k] = v
+        else:
+            record[k] = _redact(str(v))
     line = json.dumps(record) + "\n"
     sys.stdout.write(line)
     sys.stdout.flush()

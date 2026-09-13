@@ -16,16 +16,22 @@ ENV GARMIN_MCP_REF=${GARMIN_MCP_REF}
 # tini: reaps the many worker subprocesses the gateway spawns.
 RUN apt-get update && apt-get install -y --no-install-recommends git tini && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml uv.lock garmin-worker-override.txt README.md LICENSE ./
 COPY src ./src
 COPY scripts ./scripts
-# mcp<2: garmin_mcp is written against the mcp 1.x API (mcp.server.fastmcp) and
-# doesn't bound its own dependency — mcp 2.0.0 (2026-07-28) removed that module,
-# and the first image rebuild after the release crashed every worker spawn with
-# ModuleNotFoundError (2026-07-31 incident). The worker's other deps float too;
-# pin here, in the same resolve, whenever one of them breaks the same way.
-RUN uv pip install --system . && \
-    uv pip install --system "garmin-mcp @ git+https://github.com/Taxuspt/garmin_mcp@${GARMIN_MCP_REF}" "mcp<2"
+# Install the gateway and worker from their reviewed frozen locks. The pinned
+# worker lock predates the CN DI endpoint fix, so after its frozen sync apply
+# the exact garminconnect version independently locked by this repository.
+RUN uv lock --check && uv sync --frozen
+RUN git clone https://github.com/Taxuspt/garmin_mcp /opt/garmin-mcp && \
+    git -C /opt/garmin-mcp checkout --detach "${GARMIN_MCP_REF}" && \
+    uv lock --check --project /opt/garmin-mcp && \
+    uv sync --project /opt/garmin-mcp --frozen --no-dev && \
+    uv pip install --python /opt/garmin-mcp/.venv/bin/python --no-deps \
+      --reinstall --require-hashes -r /app/garmin-worker-override.txt && \
+    /opt/garmin-mcp/.venv/bin/python -c \
+      "from importlib.metadata import version; assert version('garminconnect') == '0.3.6'"
+ENV PATH="/opt/garmin-mcp/.venv/bin:/app/.venv/bin:${PATH}"
 ENTRYPOINT ["tini", "--"]
 CMD ["missingmcp"]
 EXPOSE 8080

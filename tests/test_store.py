@@ -38,6 +38,31 @@ def test_account_upsert_and_fetch(conn):
     assert store.get_account_tokens(conn, "garmin", "absent@x.cz", SECRET) is None
 
 
+def test_account_conditional_update_rejects_stale_worker_generation(conn):
+    store.upsert_account(conn, "garmin", "global:me@x.cz", '{"token":1}', SECRET)
+    assert store.update_account_if_matches(
+        conn, "garmin", "global:me@x.cz", '{"token":1}', '{"token":2}', SECRET)
+    assert not store.update_account_if_matches(
+        conn, "garmin", "global:me@x.cz", '{"token":1}', '{"stale":3}', SECRET)
+    assert store.get_account_tokens(
+        conn, "garmin", "global:me@x.cz", SECRET) == '{"token":2}'
+
+
+def test_region_accounts_and_legacy_identity_coexist_encrypted(conn):
+    for key, value in [
+        ("cn:me@x.cz", '{"secret":"cn-token"}'),
+        ("global:me@x.cz", '{"secret":"global-token"}'),
+        ("me@x.cz", '{"secret":"legacy-token"}'),
+    ]:
+        store.upsert_account(conn, "garmin", key, value, SECRET)
+    rows = conn.execute(
+        "SELECT account_key, blob_enc FROM accounts WHERE adapter='garmin'"
+    ).fetchall()
+    assert {row["account_key"] for row in rows} == {
+        "cn:me@x.cz", "global:me@x.cz", "me@x.cz"}
+    assert all("-token" not in row["blob_enc"] for row in rows)
+
+
 def test_access_token_maps_to_account(conn):
     store.upsert_account(conn, "garmin", "me@x.cz", "{}", SECRET)
     store.create_access_token(conn, "hash1", "garmin", "me@x.cz", "client1")

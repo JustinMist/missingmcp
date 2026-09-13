@@ -1,0 +1,17 @@
+{
+  "current_v1_cn": {
+    "v": 1,
+    "region": "cn",
+    "tokens": {
+      "example": "GARMIN_TOKEN_PAYLOAD_PLACEHOLDER"
+    }
+  },
+  "current_v1_global": {
+    "v": 1,
+    "region": "global",
+    "tokens": {
+      "example": "GARMIN_TOKEN_PAYLOAD_PLACEHOLDER"
+    }
+  },
+  "legacy_behavior": "A raw Garmin token JSON object without v/region wrapper is interpreted as global."
+}

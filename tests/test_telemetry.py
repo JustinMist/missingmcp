@@ -181,7 +181,8 @@ def test_csp_widens_only_with_hosts():
 
 def test_account_exists(conn):
     assert not store.account_exists(conn, "garmin", "me@x.cz")
-    store.upsert_account(conn, "garmin", "me@x.cz", "{}", CONFIG.gateway_secret)
+    store.upsert_account(conn, "garmin", "me@x.cz", _garmin_tokens(1),
+                         CONFIG.gateway_secret)
     assert store.account_exists(conn, "garmin", "me@x.cz")
 
 
@@ -225,8 +226,15 @@ def test_capture_mcp_error_props(recorder):
 
 # --- oauth funnel events (flow-level) -----------------------------------------
 
+def _garmin_tokens(generation: int) -> str:
+    return (f'{{"di_client_id":"client-{generation}",'
+            f'"di_refresh_token":"refresh-{generation}",'
+            f'"di_token":"access-{generation}"}}')
+
+
 def _authz_app(conn):
-    adapter = GarminAdapter(CONFIG)
+    from missingmcp.app import _garmin_account_key_resolver
+    adapter = GarminAdapter(CONFIG, _garmin_account_key_resolver(conn, CONFIG))
     state = oauth.AuthState(security.CsrfStore())
 
     async def apost(request):
@@ -241,7 +249,8 @@ def test_login_flow_emits_funnel_events_and_stitch(conn, recorder):
     store.create_client(conn, cid, "h", ["https://claude.ai/cb"], "Claude", "garmin")
     client.cookies.set("ph_phc_test_posthog", _ph_cookie("anon-123"))
     with patch.object(garmin_login, "start_login",
-                      return_value=garmin_login.LoginResult(status="ok", tokens_json='{"t":1}')), \
+                      return_value=garmin_login.LoginResult(
+                          status="ok", tokens_json=_garmin_tokens(1))), \
          patch.object(garmin_login, "verify_tokens", return_value="Vaclav S"):
         r = client.post("/oauth/authorize", data={
             "csrf": state.csrf.issue(), "client_id": cid,
@@ -251,9 +260,11 @@ def test_login_flow_emits_funnel_events_and_stitch(conn, recorder):
         })
     assert r.status_code == 302
     by_name = {e: (d, p) for e, d, p in recorder.events}
-    assert by_name["login_succeeded"][0] == "me@x.cz"
-    assert by_name["account_connected"] == ("me@x.cz", {"adapter": "garmin", "connect_status": "new"})
-    assert by_name["$identify"] == ("me@x.cz", {"$anon_distinct_id": "anon-123"})
+    assert by_name["login_succeeded"][0] == "global:me@x.cz"
+    assert by_name["account_connected"] == (
+        "global:me@x.cz", {"adapter": "garmin", "connect_status": "new"})
+    assert by_name["$identify"] == (
+        "global:me@x.cz", {"$anon_distinct_id": "anon-123"})
 
 
 def test_login_failure_emits_login_failed(conn, recorder):
@@ -281,9 +292,11 @@ def test_returning_account_status(conn, recorder):
     client, state = _authz_app(conn)
     cid = security.new_secret(8)
     store.create_client(conn, cid, "h", ["https://claude.ai/cb"], "Claude", "garmin")
-    store.upsert_account(conn, "garmin", "me@x.cz", "{}", CONFIG.gateway_secret)
+    store.upsert_account(conn, "garmin", "me@x.cz", _garmin_tokens(1),
+                         CONFIG.gateway_secret)
     with patch.object(garmin_login, "start_login",
-                      return_value=garmin_login.LoginResult(status="ok", tokens_json='{"t":2}')), \
+                      return_value=garmin_login.LoginResult(
+                          status="ok", tokens_json=_garmin_tokens(2))), \
          patch.object(garmin_login, "verify_tokens", return_value="Vaclav S"):
         r = client.post("/oauth/authorize", data={
             "csrf": state.csrf.issue(), "client_id": cid,

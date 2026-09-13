@@ -46,8 +46,10 @@ _Avoid_: dead adapter, dropped adapter, disabled adapter
 
 **Account**:
 A person's connection to one upstream service, keyed by `(adapter, account_key)`
-where `account_key` is their lowercased login email. Holds the encrypted
-credential blob.
+where `account_key` is the adapter-owned normalized identity. Garmin includes
+the account region (`cn:<email>` / `global:<email>`), while pre-region Global
+rows may retain the naked lowercased email for Bearer compatibility. Holds the
+encrypted credential blob.
 _Avoid_: user, customer, login (those blur account vs. device vs. person).
 
 **Active account**:
